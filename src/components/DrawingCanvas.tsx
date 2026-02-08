@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { useDrawingStore } from '../store';
 import type { Point, Stroke } from '../types';
 import { generateId, distance, smoothStroke } from '../utils';
 import { predictShape } from '../shapePredict';
+import { DynamicStrokeAnalyzer } from '../strokeAnalysis';
 
 interface CanvasProps {
   onStrokeComplete?: (stroke: Stroke) => void;
@@ -19,6 +20,8 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentStrokePoints, setCurrentStrokePoints] = useState<Point[]>([]);
+  const [selectedStrokeId, setSelectedStrokeId] = useState<string | null>(null);
+  const strokeAnalyzer = useRef<DynamicStrokeAnalyzer>(new DynamicStrokeAnalyzer());
 
   const store = useDrawingStore();
 
@@ -71,6 +74,55 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     rendererRef.current = renderer;
 
     // Add grid and axes
+    const addGridAndAxes = (scene: THREE.Scene) => {
+      // Grid - GridHelper rotates the grid, we need to use it correctly for our 2D view
+      const gridSize = 100;
+      const gridDivisions = 100;
+      const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0xdddddd, 0xf0f0f0);
+      // Rotate grid to be in XY plane (default is XZ)
+      gridHelper.rotation.x = Math.PI / 2;
+      gridHelper.position.z = -1;
+      scene.add(gridHelper);
+
+      // X-axis (red) - from -50 to 50 with arrows
+      const xGeometry = new THREE.BufferGeometry();
+      xGeometry.setAttribute(
+        'position',
+        new THREE.BufferAttribute(new Float32Array([-50, 0, 0, 50, 0, 0]), 3)
+      );
+      const xMaterial = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 2 });
+      const xAxis = new THREE.Line(xGeometry, xMaterial);
+      scene.add(xAxis);
+
+      // X-axis arrow (positive direction)
+      const xArrowGeometry = new THREE.BufferGeometry();
+      xArrowGeometry.setAttribute(
+        'position',
+        new THREE.BufferAttribute(new Float32Array([45, -2, 0, 50, 0, 0, 45, 2, 0]), 3)
+      );
+      const xArrow = new THREE.Line(xArrowGeometry, xMaterial);
+      scene.add(xArrow);
+
+      // Y-axis (green) - from -50 to 50 with arrows
+      const yGeometry = new THREE.BufferGeometry();
+      yGeometry.setAttribute(
+        'position',
+        new THREE.BufferAttribute(new Float32Array([0, -50, 0, 0, 50, 0]), 3)
+      );
+      const yMaterial = new THREE.LineBasicMaterial({ color: 0x00aa00, linewidth: 2 });
+      const yAxis = new THREE.Line(yGeometry, yMaterial);
+      scene.add(yAxis);
+
+      // Y-axis arrow (positive direction)
+      const yArrowGeometry = new THREE.BufferGeometry();
+      yArrowGeometry.setAttribute(
+        'position',
+        new THREE.BufferAttribute(new Float32Array([-2, 45, 0, 0, 50, 0, 2, 45, 0]), 3)
+      );
+      const yArrow = new THREE.Line(yArrowGeometry, yMaterial);
+      scene.add(yArrow);
+    };
+
     addGridAndAxes(scene);
 
     // Add lighting for 3D strokes
@@ -81,8 +133,8 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
     scene.add(ambientLight);
 
-    // DEBUG: Add a test red sphere at origin to verify rendering
-    const testGeometry = new THREE.SphereGeometry(2, 16, 16);
+    // DEBUG: Add a small red sphere at origin to verify rendering
+    const testGeometry = new THREE.SphereGeometry(0.5, 16, 16);
     const testMaterial = new THREE.MeshPhongMaterial({ color: 0xff0000 });
     const testSphere = new THREE.Mesh(testGeometry, testMaterial);
     testSphere.position.set(0, 0, 0);
@@ -128,7 +180,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
   };
 
   // Create a single continuous tube mesh from points (no segments/dots — one smooth line)
-  const createTubeFromPoints = (
+  const createTubeFromPoints = useCallback((
     points: Point[],
     radius: number,
     color: number,
@@ -144,39 +196,9 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       opacity,
     });
     return new THREE.Mesh(geometry, material);
-  };
+  }, []);
 
-  // Add grid and axes to scene
-  const addGridAndAxes = (scene: THREE.Scene) => {
-    // Grid - GridHelper rotates the grid, we need to use it correctly for our 2D view
-    const gridSize = 100;
-    const gridDivisions = 100;
-    const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0xdddddd, 0xf0f0f0);
-    // Rotate grid to be in XY plane (default is XZ)
-    gridHelper.rotation.x = Math.PI / 2;
-    gridHelper.position.z = -1;
-    scene.add(gridHelper);
 
-    // X-axis (red) - from -50 to 50
-    const xGeometry = new THREE.BufferGeometry();
-    xGeometry.setAttribute(
-      'position',
-      new THREE.BufferAttribute(new Float32Array([-50, 0, 0, 50, 0, 0]), 3)
-    );
-    const xMaterial = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 3 });
-    const xAxis = new THREE.Line(xGeometry, xMaterial);
-    scene.add(xAxis);
-
-    // Y-axis (green) - from -50 to 50
-    const yGeometry = new THREE.BufferGeometry();
-    yGeometry.setAttribute(
-      'position',
-      new THREE.BufferAttribute(new Float32Array([0, -50, 0, 0, 50, 0]), 3)
-    );
-    const yMaterial = new THREE.LineBasicMaterial({ color: 0x00aa00, linewidth: 3 });
-    const yAxis = new THREE.Line(yGeometry, yMaterial);
-    scene.add(yAxis);
-  };
 
   // Render finalized strokes as single continuous tubes (smoothed points, no segments/dots)
   useEffect(() => {
@@ -201,20 +223,43 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
       let colorNum = parseInt(stroke.color.replace('#', ''), 16);
       if (colorNum === 0) colorNum = 0x222222;
-      const radius = Math.max(stroke.thickness / 2, 0.3);
+      // Convert thickness to much smaller radius for proper visual scaling
+      // 2px thickness -> 0.1 radius, scaled down significantly
+      const radius = Math.max(stroke.thickness * 0.05, 0.05);
 
-      const mesh = createTubeFromPoints(points, radius, colorNum, 1, 0.1);
-      if (!mesh) return;
+      // Highlight selected stroke
+      const isSelected = stroke.id === selectedStrokeId;
+      const finalOpacity = isSelected ? 0.6 : 1.0;
+      const finalZ = isSelected ? 0.15 : 0.1; // Raise selected stroke slightly
+      
+      const mesh = createTubeFromPoints(points, radius, colorNum, finalOpacity, finalZ);
+      if (!mesh || !sceneRef.current) return;
+      
+      // Add selection indicator (glow effect)
+      if (isSelected) {
+        const glowRadius = radius + 1.5;
+        const glowMesh = createTubeFromPoints(points, glowRadius, 0x00ff00, 0.3, 0.16);
+        if (glowMesh) {
+          const strokeGroup = new THREE.Group();
+          strokeGroup.add(glowMesh);
+          strokeGroup.add(mesh);
+          strokeGroup.userData.strokeId = stroke.id;
+          sceneRef.current.add(strokeGroup);
+          strokeLinesRef.current.set(stroke.id, strokeGroup);
+          return;
+        }
+      }
+      
       const strokeGroup = new THREE.Group();
       strokeGroup.add(mesh);
       strokeGroup.userData.strokeId = stroke.id;
       sceneRef.current.add(strokeGroup);
       strokeLinesRef.current.set(stroke.id, strokeGroup);
     });
-  }, [store.strokes]);
+  }, [store.strokes, createTubeFromPoints, selectedStrokeId]);
 
   // Screen to world using current camera frustum (correct after zoom/resize)
-  const screenToWorld = (clientX: number, clientY: number): { x: number; y: number } | null => {
+  const screenToWorld = useCallback((clientX: number, clientY: number): { x: number; y: number } | null => {
     const rect = containerRef.current?.getBoundingClientRect();
     const cam = cameraRef.current;
     if (!rect || !cam) return null;
@@ -223,15 +268,71 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     const x = cam.left + u * (cam.right - cam.left);
     const y = cam.top - v * (cam.top - cam.bottom);
     return { x, y };
-  };
+  }, []);
 
-  const handleMouseDown = (e: React.MouseEvent) => {
+  /**
+   * Calculate distance from point to line segment.
+   */
+  const distanceToSegment = useCallback((point: { x: number; y: number }, segStart: Point, segEnd: Point): number => {
+    const dx = segEnd.x - segStart.x;
+    const dy = segEnd.y - segStart.y;
+    const lenSq = dx * dx + dy * dy;
+    
+    if (lenSq < 1e-10) {
+      return Math.hypot(point.x - segStart.x, point.y - segStart.y);
+    }
+    
+    let t = ((point.x - segStart.x) * dx + (point.y - segStart.y) * dy) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    
+    const projX = segStart.x + t * dx;
+    const projY = segStart.y + t * dy;
+    
+    return Math.hypot(point.x - projX, point.y - projY);
+  }, []);
+
+  /**
+   * Find which stroke is at the given world position.
+   */
+  const findStrokeAtPosition = useCallback((world: { x: number; y: number }): string | null => {
+    const clickThreshold = 5.0; // Distance threshold for picking strokes
+    
+    for (const stroke of store.strokes) {
+      const points = stroke.displayPoints ?? stroke.smoothedPoints;
+      if (points.length < 2) continue;
+      
+      // Check distance from click point to stroke segments
+      for (let i = 0; i < points.length - 1; i++) {
+        const dist = distanceToSegment(world, points[i], points[i + 1]);
+        if (dist <= clickThreshold) {
+          return stroke.id;
+        }
+      }
+    }
+    
+    return null;
+  }, [store.strokes, distanceToSegment]);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
     const world = screenToWorld(e.clientX, e.clientY);
     if (!world) return;
+    
+    // Check if clicking on an existing stroke (for pick functionality)
+    if (e.shiftKey) {
+      const clickedStrokeId = findStrokeAtPosition(world);
+      setSelectedStrokeId(clickedStrokeId);
+      return;
+    }
+    
+    const timestamp = Date.now();
     setIsDrawing(true);
     setCurrentStrokePoints([world]);
-  };
+    
+    // Reset stroke analyzer for new stroke
+    strokeAnalyzer.current.reset();
+    strokeAnalyzer.current.addPoint({ ...world, timestamp });
+  }, [screenToWorld, findStrokeAtPosition]);
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!isDrawing) return;
@@ -246,13 +347,17 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     if (distance(lastPoint, { x, y }) > 0.5) {
       const newPoints = [...currentStrokePoints, { x, y }];
       setCurrentStrokePoints(newPoints);
+      
+      // Add point to stroke analyzer for velocity tracking
+      strokeAnalyzer.current.addPoint({ x, y, timestamp: Date.now() });
 
       // Render preview (single continuous tube) - draw preview line while user is drawing
       if (!sceneRef.current) return;
 
       const colorNum_raw = parseInt(store.currentColor.replace('#', ''), 16);
       const colorNum = colorNum_raw === 0 ? 0x222222 : colorNum_raw;
-      const thickness = Math.max(store.currentThickness / 2, 0.3);
+      // Use same scaling as final strokes
+      const thickness = Math.max(store.currentThickness * 0.05, 0.05);
       const newGeometry = createTubeGeometryFromPoints(newPoints, thickness, 0.05);
 
       if (!newGeometry) return;
@@ -296,23 +401,56 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       previewLineRef.current = null;
     }
 
-    // Finalize: smooth, optionally predict shape, add to store
+    // Finalize: analyze stroke for velocity-based corners, then smooth and predict shape
     if (currentStrokePoints.length > 1) {
       const rawPoints = currentStrokePoints;
-      const smoothedPoints = smoothStroke(rawPoints);
+      
+      // Analyze stroke for velocity-based corner detection
+      const analysis = strokeAnalyzer.current.analyze();
+      
+      // DETECTION-FIRST: Predict what user intended to draw BEFORE any smoothing
+      let pointsForPrediction = rawPoints;
+      if (analysis.isMultiline && analysis.corners.length > 0) {
+        // Use corner points as key points for shape prediction
+        const cornerPoints = analysis.corners.map(idx => rawPoints[idx]);
+        // Add start and end points if not already included
+        if (!cornerPoints.includes(rawPoints[0])) cornerPoints.unshift(rawPoints[0]);
+        if (!cornerPoints.includes(rawPoints[rawPoints.length - 1])) cornerPoints.push(rawPoints[rawPoints.length - 1]);
+        pointsForPrediction = cornerPoints;
+      }
+      
+      // RESPECT INDIVIDUAL OPTIONS: Apply detection and smoothing based on user settings
+      
+      let finalPoints: Point[] = rawPoints; // Default to raw input
+      let displayPoints: Point[] | undefined;
+
+      // STEP 1: Apply prediction if enabled
+      if (store.predictEnabled) {
+        const predicted = predictShape(pointsForPrediction);
+        if (predicted) {
+          // Shape detected - use predicted points for display
+          finalPoints = pointsForPrediction; // Keep original for consistent strokes
+          displayPoints = predicted;
+        }
+      }
+      
+      // STEP 2: Apply smoothing if enabled AND no shape was detected
+      if (store.smoothEnabled && !displayPoints) {
+        finalPoints = smoothStroke(finalPoints);
+      }
 
       const stroke: Stroke = {
         id: generateId(),
         points: rawPoints,
-        smoothedPoints,
+        smoothedPoints: finalPoints,
         color: store.currentColor,
         thickness: store.currentThickness,
         timestamp: Date.now(),
       };
 
-      if (store.predictEnabled) {
-        const predicted = predictShape(smoothedPoints);
-        if (predicted) stroke.displayPoints = predicted;
+      // Store the display points if shape was predicted
+      if (displayPoints) {
+        stroke.displayPoints = displayPoints;
       }
 
       store.addStroke(stroke);

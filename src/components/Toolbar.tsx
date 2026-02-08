@@ -19,6 +19,7 @@ export const Toolbar: React.FC = () => {
         panX: store.panX,
         panY: store.panY,
         predictEnabled: store.predictEnabled,
+        smoothEnabled: store.smoothEnabled,
       },
     };
 
@@ -55,6 +56,9 @@ export const Toolbar: React.FC = () => {
         store.setPan(data.canvasState.panX, data.canvasState.panY);
         if (data.canvasState.predictEnabled !== undefined) {
           store.setPredictEnabled(data.canvasState.predictEnabled);
+        }
+        if (data.canvasState.smoothEnabled !== undefined) {
+          store.setSmoothEnabled(data.canvasState.smoothEnabled);
         }
       } catch (error) {
         console.error('Failed to load file:', error);
@@ -94,6 +98,18 @@ export const Toolbar: React.FC = () => {
           className="slider"
         />
         <span className="thickness-value">{store.currentThickness}px</span>
+      </div>
+
+      <div className="toolbar-group">
+        <label htmlFor="smooth-checkbox" title="Apply smoothing to freehand curves">
+          <input
+            id="smooth-checkbox"
+            type="checkbox"
+            checked={store.smoothEnabled}
+            onChange={(e) => store.setSmoothEnabled(e.target.checked)}
+          />
+          {' '}Smooth
+        </label>
       </div>
 
       <div className="toolbar-group">

@@ -28,6 +28,10 @@ interface DrawingState {
   predictEnabled: boolean;
   setPredictEnabled: (enabled: boolean) => void;
 
+  // Smooth (stroke smoothing)
+  smoothEnabled: boolean;
+  setSmoothEnabled: (enabled: boolean) => void;
+
   // Undo/Redo
   history: CanvasState[];
   historyIndex: number;
@@ -36,7 +40,7 @@ interface DrawingState {
   redo: () => void;
 }
 
-export const useDrawingStore = create<DrawingState>((set, get) => {
+export const useDrawingStore = create<DrawingState>((set) => {
   const initialCanvasState: CanvasState = {
     strokes: [],
     canvasWidth: 100,
@@ -44,21 +48,11 @@ export const useDrawingStore = create<DrawingState>((set, get) => {
     zoom: 1,
     panX: 0,
     panY: 0,
-    predictEnabled: true,
+    predictEnabled: false, // Default: unchecked
+    smoothEnabled: true, // Default: checked
   };
 
-  const getCanvasState = (): CanvasState => {
-    const state = get();
-    return {
-      strokes: state.strokes,
-      canvasWidth: state.canvasWidth,
-      canvasHeight: state.canvasHeight,
-      zoom: state.zoom,
-      panX: state.panX,
-      panY: state.panY,
-      predictEnabled: state.predictEnabled,
-    };
-  };
+
 
   return {
     // Initial state
@@ -70,7 +64,8 @@ export const useDrawingStore = create<DrawingState>((set, get) => {
     panY: 0,
     currentColor: '#000000',
     currentThickness: 2,
-    predictEnabled: true,
+    predictEnabled: false, // Default: unchecked
+    smoothEnabled: true, // Default: checked
     history: [initialCanvasState],
     historyIndex: 0,
 
@@ -87,6 +82,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => {
           panX: state.panX,
           panY: state.panY,
           predictEnabled: state.predictEnabled,
+          smoothEnabled: state.smoothEnabled,
         });
         return {
           strokes: newStrokes,
@@ -107,6 +103,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => {
           panX: state.panX,
           panY: state.panY,
           predictEnabled: state.predictEnabled,
+          smoothEnabled: state.smoothEnabled,
         });
         return {
           strokes: newStrokes,
@@ -127,6 +124,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => {
           panX: state.panX,
           panY: state.panY,
           predictEnabled: state.predictEnabled,
+          smoothEnabled: state.smoothEnabled,
         });
         return {
           strokes: newStrokes,
@@ -164,6 +162,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => {
     setPan: (panX, panY) => set({ panX, panY }),
 
     setPredictEnabled: (enabled) => set({ predictEnabled: enabled }),
+    setSmoothEnabled: (enabled) => set({ smoothEnabled: enabled }),
 
     // Drawing tools
     setColor: (color) => set({ currentColor: color }),

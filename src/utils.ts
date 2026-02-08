@@ -24,29 +24,52 @@ export function catmullRom(p0: Point, p1: Point, p2: Point, p3: Point, t: number
   return { x, y };
 }
 
-// Smooth stroke using Catmull-Rom spline
+/**
+ * Smooth stroke ONLY when detection fails to find a clear geometric pattern.
+ * This implements "detection-first" principle: detect what user intended, then only smooth freehand curves.
+ */
 export function smoothStroke(points: Point[]): Point[] {
   if (points.length < 2) return points;
   if (points.length === 2) return points;
+  if (points.length === 3) return points; // Don't smooth very short strokes
 
   const smoothed: Point[] = [];
-  const steps = 10; // Interpolated points between each pair (higher = smoother, more natural curve)
+  const steps = 6; // Reduced steps for subtler smoothing (only when needed)
 
-  for (let i = 0; i < points.length - 1; i++) {
-    const p0 = points[Math.max(0, i - 1)];
+  // Always preserve the exact first point
+  smoothed.push(points[0]);
+
+  // Only smooth interior segments (from first to second-to-last)
+  for (let i = 0; i < points.length - 2; i++) {
     const p1 = points[i];
     const p2 = points[i + 1];
-    const p3 = points[Math.min(points.length - 1, i + 2)];
 
-    smoothed.push(p1);
+    // For first segment, use first point as p0
+    // For other segments, use previous point as p0
+    const p0 = i === 0 ? points[0] : points[i - 1];
+    
+    // For interior segments, we have proper p3
+    // For penultimate segment, use last point as p3
+    const p3 = i < points.length - 3 ? points[i + 2] : points[points.length - 1];
 
+    // Add the current point (except for the very first one which we already added)
+    if (i > 0) {
+      smoothed.push(p1);
+    }
+
+    // Add interpolated points between p1 and p2
     for (let j = 1; j <= steps; j++) {
       const t = j / (steps + 1);
       smoothed.push(catmullRom(p0, p1, p2, p3, t));
     }
   }
 
+  // Add the second-to-last point and preserve the exact last point
+  if (points.length > 2) {
+    smoothed.push(points[points.length - 2]);
+  }
   smoothed.push(points[points.length - 1]);
+  
   return smoothed;
 }
 

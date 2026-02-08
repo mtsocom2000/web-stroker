@@ -1,6 +1,8 @@
 export interface Point {
   x: number;
   y: number;
+  /** Timestamp in milliseconds for speed analysis */
+  timestamp?: number;
 }
 
 export interface Stroke {
@@ -22,6 +24,7 @@ export interface CanvasState {
   panX: number;
   panY: number;
   predictEnabled?: boolean;
+  smoothEnabled?: boolean;
 }
 
 export interface DrawingData {
