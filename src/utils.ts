@@ -27,50 +27,72 @@ export function catmullRom(p0: Point, p1: Point, p2: Point, p3: Point, t: number
 /**
  * Smooth stroke ONLY when detection fails to find a clear geometric pattern.
  * This implements "detection-first" principle: detect what user intended, then only smooth freehand curves.
+ * 
+ * Creates a balanced smooth curve that eliminates jags while preserving drawing character.
  */
 export function smoothStroke(points: Point[]): Point[] {
+  console.log(`smoothStroke called with ${points.length} points`);
+  
   if (points.length < 2) return points;
   if (points.length === 2) return points;
   if (points.length === 3) return points; // Don't smooth very short strokes
 
+  // BALANCED SMOOTHING: Effective but preserves drawing character
   const smoothed: Point[] = [];
-  const steps = 6; // Reduced steps for subtler smoothing (only when needed)
-
-  // Always preserve the exact first point
+  const windowSize = 3; // 3-point moving average (less aggressive than 5)
+  
+  // Preserve first point
   smoothed.push(points[0]);
-
-  // Only smooth interior segments (from first to second-to-last)
-  for (let i = 0; i < points.length - 2; i++) {
-    const p1 = points[i];
-    const p2 = points[i + 1];
-
-    // For first segment, use first point as p0
-    // For other segments, use previous point as p0
-    const p0 = i === 0 ? points[0] : points[i - 1];
+  
+  // Apply weighted moving average smoothing to interior points
+  for (let i = 1; i < points.length - 1; i++) {
+    let sumX = 0;
+    let sumY = 0;
+    let count = 0;
     
-    // For interior segments, we have proper p3
-    // For penultimate segment, use last point as p3
-    const p3 = i < points.length - 3 ? points[i + 2] : points[points.length - 1];
-
-    // Add the current point (except for the very first one which we already added)
-    if (i > 0) {
-      smoothed.push(p1);
+    // Average with smaller window for better balance
+    for (let j = Math.max(0, i - windowSize); j <= Math.min(points.length - 1, i + windowSize); j++) {
+      sumX += points[j].x;
+      sumY += points[j].y;
+      count++;
     }
-
-    // Add interpolated points between p1 and p2
-    for (let j = 1; j <= steps; j++) {
-      const t = j / (steps + 1);
-      smoothed.push(catmullRom(p0, p1, p2, p3, t));
-    }
+    
+    // Higher weight for center point to preserve drawing character
+    const weight = 5.0; // Increased center point weight for less distortion
+    sumX += weight * points[i].x;
+    sumY += weight * points[i].y;
+    count += weight;
+    
+    smoothed.push({
+      x: sumX / count,
+      y: sumY / count
+    });
   }
-
-  // Add the second-to-last point and preserve the exact last point
-  if (points.length > 2) {
-    smoothed.push(points[points.length - 2]);
-  }
+  
+  // Preserve last point
   smoothed.push(points[points.length - 1]);
   
-  return smoothed;
+  // Add interpolated points between averaged points for smooth curves
+  const ultraSmoothed: Point[] = [smoothed[0]];
+  const steps = 6; // Reduced from 8 to 6 for more balanced interpolation
+  
+  for (let i = 0; i < smoothed.length - 1; i++) {
+    const p1 = smoothed[i];
+    const p2 = smoothed[i + 1];
+    
+    for (let j = 1; j <= steps; j++) {
+      const t = j / (steps + 1);
+      ultraSmoothed.push({
+        x: p1.x + (p2.x - p1.x) * t,
+        y: p1.y + (p2.y - p1.y) * t
+      });
+    }
+  }
+  
+  ultraSmoothed.push(smoothed[smoothed.length - 1]);
+  
+  console.log(`smoothStroke returning ${ultraSmoothed.length} points with balanced smoothing`);
+  return ultraSmoothed;
 }
 
 // Distance between two points

@@ -172,11 +172,64 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     z = 0.1
   ): THREE.TubeGeometry | null => {
     if (points.length < 2) return null;
+    
+    // Create a curve that uses ALL our points directly, no Three.js smoothing
     const vecs = points.map((p) => new THREE.Vector3(p.x, p.y, z));
-    const curve = new THREE.CatmullRomCurve3(vecs);
-    const tubularSegments = Math.max(32, Math.min(128, points.length * 4));
-    const radialSegments = 12;
+    const curve = new THREE.CatmullRomCurve3(vecs, false, 'chordal', 0.0); // chordal type preserves point distribution
+    
+    // Use as many segments as points to capture all our smoothness
+    const tubularSegments = Math.min(points.length - 1, 1024); // Higher cap for ultra-smooth
+    const radialSegments = 32; // Even higher for maximum smoothness
+    
+    console.log(`Creating tube with ${tubularSegments} segments from ${points.length} points`);
+    
     return new THREE.TubeGeometry(curve, tubularSegments, radius, radialSegments);
+  };
+
+  // Alternative: Direct geometry creation that bypasses Three.js curve entirely
+  const createDirectCylinderGeometry = (
+    points: Point[],
+    radius: number,
+    z = 0.1
+  ): THREE.BufferGeometry | null => {
+    if (points.length < 2) return null;
+
+    const radialSegments = 16;
+    const vertices: number[] = [];
+    const indices: number[] = [];
+
+    // Create vertices for each point as a small cylinder segment
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      const angle = (i / (points.length - 1)) * Math.PI * 2;
+      
+      // Create circle around each point
+      for (let j = 0; j <= radialSegments; j++) {
+        const theta = (j / radialSegments) * Math.PI * 2;
+        vertices.push(
+          p.x + Math.cos(theta) * radius,
+          p.y + Math.sin(theta) * radius,
+          z
+        );
+      }
+    }
+
+    // Create indices for triangle strips
+    for (let i = 0; i < points.length - 1; i++) {
+      for (let j = 0; j < radialSegments; j++) {
+        const a = i * (radialSegments + 1) + j;
+        const b = a + radialSegments + 1;
+        
+        indices.push(a, b, a + 1);
+        indices.push(b, b + 1, a + 1);
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setIndex(indices);
+    
+    return geometry;
   };
 
   // Create a single continuous tube mesh from points (no segments/dots — one smooth line)
@@ -197,6 +250,8 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     });
     return new THREE.Mesh(geometry, material);
   }, []);
+
+  
 
 
 
@@ -219,6 +274,9 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       const points =
         stroke.displayPoints ??
         (stroke.smoothedPoints.length >= 2 ? stroke.smoothedPoints : stroke.points);
+      
+      console.log(`Rendering stroke: using ${points.length} points (displayPoints: ${stroke.displayPoints?.length}, smoothedPoints: ${stroke.smoothedPoints.length}, original: ${stroke.points.length})`);
+      
       if (points.length < 2) return;
 
       let colorNum = parseInt(stroke.color.replace('#', ''), 16);
@@ -237,7 +295,8 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       
       // Add selection indicator (glow effect)
       if (isSelected) {
-        const glowRadius = radius + 1.5;
+        // const glowRadius = radius + 1.5;
+        const glowRadius = Math.max(stroke.thickness * 0.05, 0.05) + 1.5;
         const glowMesh = createTubeFromPoints(points, glowRadius, 0x00ff00, 0.3, 0.16);
         if (glowMesh) {
           const strokeGroup = new THREE.Group();
@@ -343,8 +402,8 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
     const lastPoint = currentStrokePoints[currentStrokePoints.length - 1];
 
-    // Only add point if distance is > 0.5cm
-    if (distance(lastPoint, { x, y }) > 0.5) {
+    // Only add point if distance is > 0.1cm (capture more points for smoother input)
+    if (distance(lastPoint, { x, y }) > 0.1) {
       const newPoints = [...currentStrokePoints, { x, y }];
       setCurrentStrokePoints(newPoints);
       
@@ -436,7 +495,14 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       
       // STEP 2: Apply smoothing if enabled AND no shape was detected
       if (store.smoothEnabled && !displayPoints) {
+        const beforeLength = finalPoints.length;
         finalPoints = smoothStroke(finalPoints);
+        const afterLength = finalPoints.length;
+        console.log(`Smoothing applied: ${beforeLength} -> ${afterLength} points`);
+        
+        // DEBUG: Also create unsmoothed version for comparison
+        console.log('Original points (first 5):', rawPoints.slice(0, 5).map(p => `(${p.x.toFixed(1)}, ${p.y.toFixed(1)})`));
+        console.log('Smoothed points (first 5):', finalPoints.slice(0, 5).map(p => `(${p.x.toFixed(1)}, ${p.y.toFixed(1)})`));
       }
 
       const stroke: Stroke = {

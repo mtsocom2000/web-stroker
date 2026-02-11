@@ -144,7 +144,7 @@ export class AdvancedStrokeAnalyzer {
   /**
    * Check if a point is a corner based on local window analysis.
    */
-  private isCornerAtPoint(point: MovementPoint, window: MovementPoint[]): boolean {
+  private isCornerAtPoint(_point: MovementPoint, window: MovementPoint[]): boolean {
     // Check for significant velocity drop (indicates stopping/pausing)
     const velocityDrop = this.detectVelocityDrop(window);
     const isVelocityCorner = velocityDrop > this.VELOCITY_DROP_THRESHOLD;
