@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import type { Point } from '../src/types';
-import { detectStraightLine, detectPolyline, predictShape } from '../src/shapeRecognition';
+import type { Point } from '../types';
+import { detectStraightLine, detectPolyline, predictShape } from '../shapeRecognition';
 
 describe('Shape Recognition Tests', () => {
   describe('detectStraightLine', () => {

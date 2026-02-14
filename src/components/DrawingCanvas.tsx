@@ -17,8 +17,17 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const strokeLinesRef = useRef<Map<string, THREE.Group>>(new Map());
   const previewLineRef = useRef<THREE.Group | null>(null);
+  const gridRef = useRef<THREE.GridHelper | null>(null);
+  const xAxisRef = useRef<THREE.Line | null>(null);
+  const yAxisRef = useRef<THREE.Line | null>(null);
+  const xArrowRef = useRef<THREE.Line | null>(null);
+  const yArrowRef = useRef<THREE.Line | null>(null);
+  const axisLabelsRef = useRef<THREE.Sprite[]>([]);
+  const updateAxisLabelsRef = useRef<((panX: number, panY: number) => void) | null>(null);
 
   const [isDrawing, setIsDrawing] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [currentStrokePoints, setCurrentStrokePoints] = useState<Point[]>([]);
   const [selectedStrokeId, setSelectedStrokeId] = useState<string | null>(null);
   const strokeAnalyzer = useRef<DynamicStrokeAnalyzer>(new DynamicStrokeAnalyzer());
@@ -38,32 +47,34 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     const width = container.clientWidth;
     const height = container.clientHeight;
 
-    // Scene setup
+    // Scene setup with enhanced background
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xffffff);
+    scene.background = new THREE.Color(0xf8f9fa);
     sceneRef.current = scene;
-
-    // Camera setup (orthographic for 2D) — frustum set by updateCameraFrustum so aspect is correct (circle stays circle)
-    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1000);
-    camera.position.z = 10;
-    cameraRef.current = camera;
 
     const updateCameraFrustum = (cam: THREE.OrthographicCamera, w: number, h: number, zoom: number) => {
       const half = 50 / zoom;
       const aspect = w / h;
+      const { panX, panY } = useDrawingStore.getState();
       if (aspect >= 1) {
-        cam.left = -half * aspect;
-        cam.right = half * aspect;
-        cam.top = half;
-        cam.bottom = -half;
+        cam.left = -half * aspect + panX;
+        cam.right = half * aspect + panX;
+        cam.top = half + panY;
+        cam.bottom = -half + panY;
       } else {
-        cam.left = -half;
-        cam.right = half;
-        cam.top = half / aspect;
-        cam.bottom = -half / aspect;
+        cam.left = -half + panX;
+        cam.right = half + panX;
+        cam.top = half / aspect + panY;
+        cam.bottom = -half / aspect + panY;
       }
       cam.updateProjectionMatrix();
     };
+
+    // Camera setup (orthographic for 2D) — frustum set by updateCameraFrustum so aspect is correct (circle stays circle)
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1000);
+    camera.position.set(0, 0, 10);
+    camera.lookAt(0, 0, 0);
+    cameraRef.current = camera;
     updateCameraFrustum(camera, width, height, useDrawingStore.getState().zoom);
 
     // Renderer setup
@@ -73,54 +84,143 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // Add grid and axes
+    // Create number sprite for axis labels
+    const createNumberSprite = (num: number, color: string): THREE.Sprite => {
+      const canvas = document.createElement('canvas');
+      const size = 64;
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = color;
+      ctx.font = 'bold 32px Roboto, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(num.toString(), size / 2, size / 2);
+      
+      const texture = new THREE.CanvasTexture(canvas);
+      const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(3, 3, 1);
+      return sprite;
+    };
+
+    // Update axis labels based on current viewport
+    const updateAxisLabels = (panX: number, panY: number) => {
+      const currentScene = sceneRef.current;
+      const currentContainer = containerRef.current;
+      if (!currentScene || !currentContainer) return;
+      
+      // Remove old labels
+      axisLabelsRef.current.forEach(label => {
+        currentScene.remove(label);
+        label.material.dispose();
+        if (label.material.map) (label.material.map as THREE.Texture).dispose();
+      });
+      axisLabelsRef.current = [];
+
+      // Calculate visible range based on zoom
+      const halfWidth = 50 / store.zoom;
+      const halfHeight = halfWidth * (currentContainer.clientHeight / currentContainer.clientWidth);
+      
+      // Determine label interval based on zoom level
+      let interval = 10;
+      if (store.zoom < 0.3) interval = 50;
+      else if (store.zoom < 0.6) interval = 20;
+      else if (store.zoom > 2) interval = 5;
+
+      // Add X-axis labels for visible range
+      const startX = Math.floor((panX - halfWidth) / interval) * interval;
+      const endX = Math.ceil((panX + halfWidth) / interval) * interval;
+      
+      for (let i = startX; i <= endX; i += interval) {
+        if (i === 0) continue;
+        const sprite = createNumberSprite(i, '#cc0000');
+        sprite.position.set(i, -4, 0);
+        currentScene.add(sprite);
+        axisLabelsRef.current.push(sprite);
+      }
+
+      // Add Y-axis labels for visible range
+      const startY = Math.floor((panY - halfHeight) / interval) * interval;
+      const endY = Math.ceil((panY + halfHeight) / interval) * interval;
+      
+      for (let i = startY; i <= endY; i += interval) {
+        if (i === 0) continue;
+        const sprite = createNumberSprite(i, '#00aa00');
+        sprite.position.set(-4, i, 0);
+        currentScene.add(sprite);
+        axisLabelsRef.current.push(sprite);
+      }
+
+      // Add origin label
+      const originSprite = createNumberSprite(0, '#000000');
+      originSprite.position.set(-4, -4, 0);
+      currentScene.add(originSprite);
+      axisLabelsRef.current.push(originSprite);
+    };
+
+    // Store update function ref for use in handlers
+    updateAxisLabelsRef.current = updateAxisLabels;
+
+    // Initial axis labels
+    updateAxisLabels(0, 0);
+
+    // Add grid and axes (fixed at world origin, not moving with pan)
     const addGridAndAxes = (scene: THREE.Scene) => {
-      // Grid - GridHelper rotates the grid, we need to use it correctly for our 2D view
-      const gridSize = 100;
-      const gridDivisions = 100;
+      // Large grid for infinite-like effect
+      const gridSize = 2000;
+      const gridDivisions = 200;
       const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0xdddddd, 0xf0f0f0);
-      // Rotate grid to be in XY plane (default is XZ)
       gridHelper.rotation.x = Math.PI / 2;
       gridHelper.position.z = -1;
       scene.add(gridHelper);
+      gridRef.current = gridHelper;
 
-      // X-axis (red) - from -50 to 50 with arrows
+      // X-axis (red) - extends far
+      const xAxisLength = 1000;
       const xGeometry = new THREE.BufferGeometry();
       xGeometry.setAttribute(
         'position',
-        new THREE.BufferAttribute(new Float32Array([-50, 0, 0, 50, 0, 0]), 3)
+        new THREE.BufferAttribute(new Float32Array([-xAxisLength, 0, 0, xAxisLength, 0, 0]), 3)
       );
       const xMaterial = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 2 });
       const xAxis = new THREE.Line(xGeometry, xMaterial);
       scene.add(xAxis);
+      xAxisRef.current = xAxis;
 
-      // X-axis arrow (positive direction)
+      // X-axis arrow
       const xArrowGeometry = new THREE.BufferGeometry();
       xArrowGeometry.setAttribute(
         'position',
-        new THREE.BufferAttribute(new Float32Array([45, -2, 0, 50, 0, 0, 45, 2, 0]), 3)
+        new THREE.BufferAttribute(new Float32Array([xAxisLength - 5, -2, 0, xAxisLength, 0, 0, xAxisLength - 5, 2, 0]), 3)
       );
       const xArrow = new THREE.Line(xArrowGeometry, xMaterial);
       scene.add(xArrow);
+      xArrowRef.current = xArrow;
 
-      // Y-axis (green) - from -50 to 50 with arrows
+      // Y-axis (green) - extends far
       const yGeometry = new THREE.BufferGeometry();
       yGeometry.setAttribute(
         'position',
-        new THREE.BufferAttribute(new Float32Array([0, -50, 0, 0, 50, 0]), 3)
+        new THREE.BufferAttribute(new Float32Array([0, -xAxisLength, 0, 0, xAxisLength, 0]), 3)
       );
       const yMaterial = new THREE.LineBasicMaterial({ color: 0x00aa00, linewidth: 2 });
       const yAxis = new THREE.Line(yGeometry, yMaterial);
       scene.add(yAxis);
+      yAxisRef.current = yAxis;
 
-      // Y-axis arrow (positive direction)
+      // Y-axis arrow
       const yArrowGeometry = new THREE.BufferGeometry();
       yArrowGeometry.setAttribute(
         'position',
-        new THREE.BufferAttribute(new Float32Array([-2, 45, 0, 0, 50, 0, 2, 45, 0]), 3)
+        new THREE.BufferAttribute(new Float32Array([-2, xAxisLength - 5, 0, 0, xAxisLength, 0, 2, xAxisLength - 5, 0]), 3)
       );
       const yArrow = new THREE.Line(yArrowGeometry, yMaterial);
       scene.add(yArrow);
+      yArrowRef.current = yArrow;
+
+      // Initial axis labels
+      updateAxisLabels(0, 0);
     };
 
     addGridAndAxes(scene);
@@ -186,51 +286,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     return new THREE.TubeGeometry(curve, tubularSegments, radius, radialSegments);
   };
 
-  // Alternative: Direct geometry creation that bypasses Three.js curve entirely
-  const createDirectCylinderGeometry = (
-    points: Point[],
-    radius: number,
-    z = 0.1
-  ): THREE.BufferGeometry | null => {
-    if (points.length < 2) return null;
 
-    const radialSegments = 16;
-    const vertices: number[] = [];
-    const indices: number[] = [];
-
-    // Create vertices for each point as a small cylinder segment
-    for (let i = 0; i < points.length; i++) {
-      const p = points[i];
-      const angle = (i / (points.length - 1)) * Math.PI * 2;
-      
-      // Create circle around each point
-      for (let j = 0; j <= radialSegments; j++) {
-        const theta = (j / radialSegments) * Math.PI * 2;
-        vertices.push(
-          p.x + Math.cos(theta) * radius,
-          p.y + Math.sin(theta) * radius,
-          z
-        );
-      }
-    }
-
-    // Create indices for triangle strips
-    for (let i = 0; i < points.length - 1; i++) {
-      for (let j = 0; j < radialSegments; j++) {
-        const a = i * (radialSegments + 1) + j;
-        const b = a + radialSegments + 1;
-        
-        indices.push(a, b, a + 1);
-        indices.push(b, b + 1, a + 1);
-      }
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-    geometry.setIndex(indices);
-    
-    return geometry;
-  };
 
   // Create a single continuous tube mesh from points (no segments/dots — one smooth line)
   const createTubeFromPoints = useCallback((
@@ -373,6 +429,14 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
   }, [store.strokes, distanceToSegment]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    // Middle mouse button - start pan mode
+    if (e.button === 1) {
+      e.preventDefault();
+      setIsPanning(true);
+      setPanStart({ x: e.clientX, y: e.clientY });
+      return;
+    }
+
     if (e.button !== 0) return;
     const world = screenToWorld(e.clientX, e.clientY);
     if (!world) return;
@@ -394,6 +458,49 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
   }, [screenToWorld, findStrokeAtPosition]);
 
   const handleMouseMove = (e: React.MouseEvent) => {
+    // Handle panning
+    if (isPanning) {
+      const dx = e.clientX - panStart.x;
+      const dy = e.clientY - panStart.y;
+      
+      // Calculate new pan position based on delta
+      const newPanX = store.panX - dx / store.zoom;
+      const newPanY = store.panY + dy / store.zoom;
+      
+      store.setPan(newPanX, newPanY);
+      
+      // Update camera frustum to show different part of world
+      const cam = cameraRef.current;
+      const container = containerRef.current;
+      if (cam && container) {
+        const width = container.clientWidth;
+        const height = container.clientHeight;
+        const half = 50 / store.zoom;
+        const aspect = width / height;
+        
+        if (aspect >= 1) {
+          cam.left = -half * aspect + newPanX;
+          cam.right = half * aspect + newPanX;
+          cam.top = half + newPanY;
+          cam.bottom = -half + newPanY;
+        } else {
+          cam.left = -half + newPanX;
+          cam.right = half + newPanX;
+          cam.top = half / aspect + newPanY;
+          cam.bottom = -half / aspect + newPanY;
+        }
+        cam.updateProjectionMatrix();
+      }
+      
+      // Update axis labels for new viewport
+      if (updateAxisLabelsRef.current) {
+        updateAxisLabelsRef.current(newPanX, newPanY);
+      }
+      
+      setPanStart({ x: e.clientX, y: e.clientY });
+      return;
+    }
+    
     if (!isDrawing) return;
     const world = screenToWorld(e.clientX, e.clientY);
     if (!world) return;
@@ -444,6 +551,12 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
   };
 
   const handleMouseUp = () => {
+    // End pan mode
+    if (isPanning) {
+      setIsPanning(false);
+      return;
+    }
+    
     if (!isDrawing) return;
 
     setIsDrawing(false);
@@ -540,16 +653,17 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         const c = containerRef.current;
         const half = 50 / newZoom;
         const aspect = c.clientWidth / c.clientHeight;
+        const { panX, panY } = store;
         if (aspect >= 1) {
-          cam.left = -half * aspect;
-          cam.right = half * aspect;
-          cam.top = half;
-          cam.bottom = -half;
+          cam.left = -half * aspect + panX;
+          cam.right = half * aspect + panX;
+          cam.top = half + panY;
+          cam.bottom = -half + panY;
         } else {
-          cam.left = -half;
-          cam.right = half;
-          cam.top = half / aspect;
-          cam.bottom = -half / aspect;
+          cam.left = -half + panX;
+          cam.right = half + panX;
+          cam.top = half / aspect + panY;
+          cam.bottom = -half / aspect + panY;
         }
         cam.updateProjectionMatrix();
       }
@@ -564,7 +678,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       style={{
         width: '100%',
         height: 'calc(100vh - 60px)',
-        cursor: 'crosshair',
+        cursor: isPanning ? 'grabbing' : 'crosshair',
       }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}

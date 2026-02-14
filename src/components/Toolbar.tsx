@@ -33,7 +33,7 @@ export const Toolbar: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const handleLoad = () => {
+  const handleLoadClick = () => {
     fileInputRef.current?.click();
   };
 
@@ -45,21 +45,26 @@ export const Toolbar: React.FC = () => {
     reader.onload = (event) => {
       try {
         const data = JSON.parse(event.target?.result as string) as DrawingData;
-        // Load strokes and canvas state
-        store.strokes.forEach((stroke) => store.removeStroke(stroke.id));
         
+        // Clear all existing strokes first
+        store.clearStrokes();
+        
+        // Add all strokes from file
         data.canvasState.strokes.forEach((stroke) => {
           store.addStroke(stroke);
         });
 
         store.setZoom(data.canvasState.zoom);
-        store.setPan(data.canvasState.panX, data.canvasState.panY);
+        store.setPan(data.canvasState.panX ?? 0, data.canvasState.panY ?? 0);
         if (data.canvasState.predictEnabled !== undefined) {
           store.setPredictEnabled(data.canvasState.predictEnabled);
         }
         if (data.canvasState.smoothEnabled !== undefined) {
           store.setSmoothEnabled(data.canvasState.smoothEnabled);
         }
+        
+        // Trigger a re-render of the canvas to update camera
+        window.dispatchEvent(new Event('resize'));
       } catch (error) {
         console.error('Failed to load file:', error);
         alert('Failed to load drawing file. Please check the file format.');
@@ -131,24 +136,17 @@ export const Toolbar: React.FC = () => {
         onClick={handleSave}
         title="Save drawing (Ctrl+S)"
       >
-        💾 Save
+        Save
       </button>
 
       <button
+        type="button"
         className="toolbar-btn"
-        onClick={handleLoad}
+        onClick={handleLoadClick}
         title="Load drawing"
       >
-        📂 Load
+        Load
       </button>
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json"
-        onChange={handleFileSelect}
-        style={{ display: 'none' }}
-      />
 
       <div className="toolbar-divider" />
 
@@ -158,7 +156,7 @@ export const Toolbar: React.FC = () => {
         disabled={store.historyIndex <= 0}
         title="Undo (Ctrl+Z)"
       >
-        ↶ Undo
+        Undo
       </button>
 
       <button
@@ -167,7 +165,7 @@ export const Toolbar: React.FC = () => {
         disabled={store.historyIndex >= store.history.length - 1}
         title="Redo (Ctrl+Y)"
       >
-        ↷ Redo
+        Redo
       </button>
 
       <div className="toolbar-divider" />
@@ -177,12 +175,20 @@ export const Toolbar: React.FC = () => {
         onClick={() => store.clearStrokes()}
         title="Clear all strokes"
       >
-        🗑️ Clear All
+        Clear
       </button>
 
       <div className="toolbar-info">
-        Zoom: {(store.zoom * 100).toFixed(0)}% | Strokes: {store.strokes.length}
+        Zoom: <span>{(store.zoom * 100).toFixed(0)}%</span> | Strokes: <span>{store.strokes.length}</span>
       </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json"
+        onChange={handleFileSelect}
+        style={{ width: 0, height: 0, opacity: 0 }}
+      />
     </div>
   );
 };
