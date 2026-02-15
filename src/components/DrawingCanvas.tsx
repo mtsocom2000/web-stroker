@@ -27,9 +27,10 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
   const [isDrawing, setIsDrawing] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [currentStrokePoints, setCurrentStrokePoints] = useState<Point[]>([]);
-  const [selectedStrokeId, setSelectedStrokeId] = useState<string | null>(null);
   const strokeAnalyzer = useRef<DynamicStrokeAnalyzer>(new DynamicStrokeAnalyzer());
 
   const store = useDrawingStore();
@@ -342,7 +343,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       const radius = Math.max(stroke.thickness * 0.05, 0.05);
 
       // Highlight selected stroke
-      const isSelected = stroke.id === selectedStrokeId;
+      const isSelected = store.selectedStrokeIds.includes(stroke.id);
       const finalOpacity = isSelected ? 0.6 : 1.0;
       const finalZ = isSelected ? 0.15 : 0.1; // Raise selected stroke slightly
       
@@ -371,7 +372,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       sceneRef.current.add(strokeGroup);
       strokeLinesRef.current.set(stroke.id, strokeGroup);
     });
-  }, [store.strokes, createTubeFromPoints, selectedStrokeId]);
+  }, [store.strokes, store.selectedStrokeIds, createTubeFromPoints]);
 
   // Screen to world using current camera frustum (correct after zoom/resize)
   const screenToWorld = useCallback((clientX: number, clientY: number): { x: number; y: number } | null => {
@@ -408,17 +409,20 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
   /**
    * Find which stroke is at the given world position.
+   * Searches in reverse order to find topmost stroke first.
    */
   const findStrokeAtPosition = useCallback((world: { x: number; y: number }): string | null => {
     const clickThreshold = 5.0; // Distance threshold for picking strokes
     
-    for (const stroke of store.strokes) {
+    // Iterate in reverse to find topmost stroke first
+    for (let i = store.strokes.length - 1; i >= 0; i--) {
+      const stroke = store.strokes[i];
       const points = stroke.displayPoints ?? stroke.smoothedPoints;
       if (points.length < 2) continue;
       
       // Check distance from click point to stroke segments
-      for (let i = 0; i < points.length - 1; i++) {
-        const dist = distanceToSegment(world, points[i], points[i + 1]);
+      for (let j = 0; j < points.length - 1; j++) {
+        const dist = distanceToSegment(world, points[j], points[j + 1]);
         if (dist <= clickThreshold) {
           return stroke.id;
         }
@@ -441,13 +445,34 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     const world = screenToWorld(e.clientX, e.clientY);
     if (!world) return;
     
-    // Check if clicking on an existing stroke (for pick functionality)
-    if (e.shiftKey) {
+    const currentStore = useDrawingStore.getState();
+    
+    // Select mode: handle selection
+    if (currentStore.mode === 'select') {
       const clickedStrokeId = findStrokeAtPosition(world);
-      setSelectedStrokeId(clickedStrokeId);
+      
+      if (e.ctrlKey || e.metaKey) {
+        // Ctrl+Click: toggle selection
+        if (clickedStrokeId) {
+          currentStore.toggleSelection(clickedStrokeId);
+        }
+      } else if (clickedStrokeId) {
+        // Click on stroke: select it (or add to selection if already selected)
+        currentStore.setSelectedStrokeIds([clickedStrokeId]);
+      } else {
+        // Click on empty space: clear selection
+        currentStore.clearSelection();
+      }
+      
+      // Start drag operation for selected strokes
+      if (currentStore.selectedStrokeIds.length > 0 || clickedStrokeId) {
+        setIsDragging(true);
+        setDragStart(world);
+      }
       return;
     }
     
+    // Draw mode: start drawing
     const timestamp = Date.now();
     setIsDrawing(true);
     setCurrentStrokePoints([world]);
@@ -498,6 +523,24 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       }
       
       setPanStart({ x: e.clientX, y: e.clientY });
+      return;
+    }
+    
+    // Handle dragging selected strokes in select mode
+    if (isDragging && store.mode === 'select' && store.selectedStrokeIds.length > 0) {
+      const world = screenToWorld(e.clientX, e.clientY);
+      if (!world) return;
+      
+      const dx = world.x - dragStart.x;
+      const dy = world.y - dragStart.y;
+      
+      // Move selected strokes visually (not committed to store yet)
+      store.selectedStrokeIds.forEach((strokeId) => {
+        const strokeGroup = strokeLinesRef.current.get(strokeId);
+        if (strokeGroup) {
+          strokeGroup.position.set(dx, dy, 0);
+        }
+      });
       return;
     }
     
@@ -554,6 +597,48 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     // End pan mode
     if (isPanning) {
       setIsPanning(false);
+      return;
+    }
+    
+    // End drag mode - commit moved strokes to store
+    if (isDragging && store.mode === 'select' && store.selectedStrokeIds.length > 0) {
+      // Reset stroke group positions and commit to store
+      const updates: { id: string; stroke: Stroke }[] = [];
+      store.selectedStrokeIds.forEach((strokeId) => {
+        const strokeGroup = strokeLinesRef.current.get(strokeId);
+        const originalStroke = store.strokes.find(s => s.id === strokeId);
+        if (strokeGroup && originalStroke) {
+          const dx = strokeGroup.position.x;
+          const dy = strokeGroup.position.y;
+          
+          // Reset visual position
+          strokeGroup.position.set(0, 0, 0);
+          
+          // Only commit if there was actual movement
+          if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+            // Create updated stroke with moved points
+            const movePoints = (points: Point[]): Point[] => 
+              points.map(p => ({ x: p.x + dx, y: p.y + dy, timestamp: p.timestamp }));
+            
+            updates.push({
+              id: strokeId,
+              stroke: {
+                ...originalStroke,
+                points: movePoints(originalStroke.points),
+                smoothedPoints: movePoints(originalStroke.smoothedPoints),
+                displayPoints: originalStroke.displayPoints ? movePoints(originalStroke.displayPoints) : undefined,
+              },
+            });
+          }
+        }
+      });
+      
+      if (updates.length > 0) {
+        store.updateStrokes(updates);
+      }
+      
+      setIsDragging(false);
+      setDragStart({ x: 0, y: 0 });
       return;
     }
     

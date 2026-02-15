@@ -119,6 +119,40 @@
   cursor: not-allowed;
 }
 
+.toolbar-btn-active {
+  background: var(--primary) !important;
+  color: white !important;
+  border-color: var(--primary) !important;
+}
+
+.toolbar-btn-active:hover:not(:disabled) {
+  background: var(--primary-dark, #1565c0) !important;
+  border-color: var(--primary-dark, #1565c0) !important;
+}
+
+.selection-panel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--surface-alt);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--divider);
+}
+
+.selection-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.mixed-indicator {
+  font-size: 11px;
+  color: var(--text-disabled);
+  font-style: italic;
+  margin-left: 4px;
+}
+
 .toolbar-btn-danger {
   color: #f44336;
   border-color: #ffcdd2;

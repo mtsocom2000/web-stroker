@@ -81,6 +81,25 @@ export const Toolbar: React.FC = () => {
   return (
     <div className="toolbar">
       <div className="toolbar-group">
+        <button
+          className={`toolbar-btn ${store.mode === 'select' ? 'toolbar-btn-active' : ''}`}
+          onClick={() => store.setMode('select')}
+          title="Select mode (V)"
+        >
+          Select
+        </button>
+        <button
+          className={`toolbar-btn ${store.mode === 'draw' ? 'toolbar-btn-active' : ''}`}
+          onClick={() => store.setMode('draw')}
+          title="Draw mode (D)"
+        >
+          Draw
+        </button>
+      </div>
+
+      <div className="toolbar-divider" />
+
+      <div className="toolbar-group">
         <label htmlFor="color-picker">Color:</label>
         <input
           id="color-picker"
@@ -178,8 +197,82 @@ export const Toolbar: React.FC = () => {
         Clear
       </button>
 
+      {store.selectedStrokeIds.length > 0 && (
+        <>
+          <div className="toolbar-divider" />
+          <div className="toolbar-group toolbar-selection-panel">
+            <span className="selection-count">{store.selectedStrokeIds.length} selected</span>
+          </div>
+          <div className="toolbar-group">
+            <label htmlFor="selection-color">Color:</label>
+            <input
+              id="selection-color"
+              type="color"
+              value={(() => {
+                const colors = store.selectedStrokeIds.map(id => store.strokes.find(s => s.id === id)?.color);
+                const uniqueColors = [...new Set(colors)];
+                return uniqueColors.length === 1 ? uniqueColors[0] || '#000000' : '#000000';
+              })()}
+              onChange={(e) => {
+                const newColor = e.target.value;
+                store.selectedStrokeIds.forEach(id => {
+                  const stroke = store.strokes.find(s => s.id === id);
+                  if (stroke) {
+                    store.updateStroke(id, { ...stroke, color: newColor });
+                  }
+                });
+              }}
+              className="color-picker"
+              title={(() => {
+                const colors = store.selectedStrokeIds.map(id => store.strokes.find(s => s.id === id)?.color);
+                const uniqueColors = [...new Set(colors)];
+                return uniqueColors.length > 1 ? 'Mixed colors' : 'Stroke color';
+              })()}
+            />
+            {(() => {
+              const colors = store.selectedStrokeIds.map(id => store.strokes.find(s => s.id === id)?.color);
+              const uniqueColors = [...new Set(colors)];
+              return uniqueColors.length > 1 && <span className="mixed-indicator">Mixed</span>;
+            })()}
+          </div>
+          <div className="toolbar-group">
+            <label htmlFor="selection-thickness">Thickness:</label>
+            <input
+              id="selection-thickness"
+              type="range"
+              min="1"
+              max="20"
+              value={(() => {
+                const thicknesses = store.selectedStrokeIds.map(id => store.strokes.find(s => s.id === id)?.thickness);
+                const uniqueThicknesses = [...new Set(thicknesses)];
+                return uniqueThicknesses.length === 1 ? (uniqueThicknesses[0] || 2) : 2;
+              })()}
+              onChange={(e) => {
+                const newThickness = parseInt(e.target.value);
+                store.selectedStrokeIds.forEach(id => {
+                  const stroke = store.strokes.find(s => s.id === id);
+                  if (stroke) {
+                    store.updateStroke(id, { ...stroke, thickness: newThickness });
+                  }
+                });
+              }}
+              className="slider"
+            />
+            {(() => {
+              const thicknesses = store.selectedStrokeIds.map(id => store.strokes.find(s => s.id === id)?.thickness);
+              const uniqueThicknesses = [...new Set(thicknesses)];
+              return uniqueThicknesses.length > 1 ? (
+                <span className="mixed-indicator">Mixed</span>
+              ) : (
+                <span className="thickness-value">{thicknesses[0] || 2}px</span>
+              );
+            })()}
+          </div>
+        </>
+      )}
+
       <div className="toolbar-info">
-        Zoom: <span>{(store.zoom * 100).toFixed(0)}%</span> | Strokes: <span>{store.strokes.length}</span>
+        Mode: <span>{store.mode === 'select' ? 'Select' : 'Draw'}</span> | Zoom: <span>{(store.zoom * 100).toFixed(0)}%</span> | Strokes: <span>{store.strokes.length}</span>
       </div>
 
       <input

@@ -10,6 +10,11 @@ function App() {
   useEffect(() => {
     // Keyboard shortcuts
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         e.preventDefault();
         store.undo();
@@ -18,7 +23,12 @@ function App() {
         store.redo();
       } else if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
-        // Trigger save - would need to emit event or use ref
+      } else if (e.key === 'v' || e.key === 'V') {
+        store.setMode('select');
+      } else if (e.key === 'd' || e.key === 'D') {
+        store.setMode('draw');
+      } else if (e.key === 'Escape') {
+        store.clearSelection();
       }
     };
 

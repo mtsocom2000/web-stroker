@@ -1,13 +1,28 @@
 import { create } from 'zustand';
 import type { Stroke, CanvasState } from './types';
 
+type DrawingMode = 'select' | 'draw';
+
 interface DrawingState {
+  // Mode
+  mode: DrawingMode;
+  setMode: (mode: DrawingMode) => void;
+
   // Strokes
   strokes: Stroke[];
   addStroke: (stroke: Stroke) => void;
   removeStroke: (id: string) => void;
   updateStroke: (id: string, stroke: Stroke) => void;
+  updateStrokes: (strokes: { id: string; stroke: Stroke }[]) => void;
   clearStrokes: () => void;
+
+  // Selection
+  selectedStrokeIds: string[];
+  setSelectedStrokeIds: (ids: string[]) => void;
+  addToSelection: (id: string) => void;
+  removeFromSelection: (id: string) => void;
+  toggleSelection: (id: string) => void;
+  clearSelection: () => void;
 
   // Canvas settings
   canvasWidth: number;
@@ -56,6 +71,7 @@ export const useDrawingStore = create<DrawingState>((set) => {
 
   return {
     // Initial state
+    mode: 'select',
     strokes: [],
     canvasWidth: 100,
     canvasHeight: 100,
@@ -66,8 +82,12 @@ export const useDrawingStore = create<DrawingState>((set) => {
     currentThickness: 2,
     predictEnabled: false, // Default: unchecked
     smoothEnabled: true, // Default: checked
+    selectedStrokeIds: [],
     history: [initialCanvasState],
     historyIndex: 0,
+
+    // Mode
+    setMode: (mode) => set({ mode }),
 
     // Stroke operations
     addStroke: (stroke) =>
@@ -86,6 +106,7 @@ export const useDrawingStore = create<DrawingState>((set) => {
         });
         return {
           strokes: newStrokes,
+          selectedStrokeIds: [],
           history: newHistory,
           historyIndex: newHistory.length - 1,
         };
@@ -107,6 +128,7 @@ export const useDrawingStore = create<DrawingState>((set) => {
         });
         return {
           strokes: newStrokes,
+          selectedStrokeIds: state.selectedStrokeIds.filter((sid) => sid !== id),
           history: newHistory,
           historyIndex: newHistory.length - 1,
         };
@@ -144,9 +166,60 @@ export const useDrawingStore = create<DrawingState>((set) => {
           panX: _state.panX,
           panY: _state.panY,
           predictEnabled: _state.predictEnabled,
+          smoothEnabled: _state.smoothEnabled,
         });
         return {
           strokes: [],
+          selectedStrokeIds: [],
+          history: newHistory,
+          historyIndex: newHistory.length - 1,
+        };
+      }),
+
+    // Selection operations
+    setSelectedStrokeIds: (ids) => set({ selectedStrokeIds: ids }),
+
+    addToSelection: (id) =>
+      set((state) => ({
+        selectedStrokeIds: state.selectedStrokeIds.includes(id)
+          ? state.selectedStrokeIds
+          : [...state.selectedStrokeIds, id],
+      })),
+
+    removeFromSelection: (id) =>
+      set((state) => ({
+        selectedStrokeIds: state.selectedStrokeIds.filter((sid) => sid !== id),
+      })),
+
+    toggleSelection: (id) =>
+      set((state) => ({
+        selectedStrokeIds: state.selectedStrokeIds.includes(id)
+          ? state.selectedStrokeIds.filter((sid) => sid !== id)
+          : [...state.selectedStrokeIds, id],
+      })),
+
+    clearSelection: () => set({ selectedStrokeIds: [] }),
+
+    // Update multiple strokes at once (for move operations)
+    updateStrokes: (updates) =>
+      set((state) => {
+        const newStrokes = state.strokes.map((s) => {
+          const update = updates.find((u) => u.id === s.id);
+          return update ? update.stroke : s;
+        });
+        const newHistory = state.history.slice(0, state.historyIndex + 1);
+        newHistory.push({
+          strokes: newStrokes,
+          canvasWidth: state.canvasWidth,
+          canvasHeight: state.canvasHeight,
+          zoom: state.zoom,
+          panX: state.panX,
+          panY: state.panY,
+          predictEnabled: state.predictEnabled,
+          smoothEnabled: state.smoothEnabled,
+        });
+        return {
+          strokes: newStrokes,
           history: newHistory,
           historyIndex: newHistory.length - 1,
         };
