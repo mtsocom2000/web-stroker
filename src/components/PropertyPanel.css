@@ -1,0 +1,68 @@
+.property-panel {
+  position: absolute;
+  top: 70px;
+  right: 20px;
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  width: 180px;
+  z-index: 100;
+  user-select: none;
+}
+
+.property-panel-header {
+  padding: 8px 12px;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--divider);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: move;
+}
+
+.property-panel-header:hover {
+  background: var(--divider);
+}
+
+.property-panel-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.property-panel-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.property-panel-group label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  min-width: 40px;
+}
+
+.property-panel-group .thickness-value {
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-width: 28px;
+  text-align: right;
+}
+
+.property-panel-group .color-picker {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  padding: 0;
+}
+
+.property-panel-group .slider {
+  flex: 1;
+  min-width: 60px;
+  height: 4px;
+}

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import './App.css';
 import { DrawingCanvas } from './components/DrawingCanvas';
+import { PropertyPanel } from './components/PropertyPanel';
 import { Toolbar } from './components/Toolbar';
 import { useDrawingStore } from './store';
 
@@ -39,6 +40,7 @@ function App() {
   return (
     <div className="app">
       <Toolbar />
+      <PropertyPanel />
       <DrawingCanvas />
     </div>
   );
