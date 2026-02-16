@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import * as THREE from 'three';
 import { useDrawingStore } from '../store';
 import type { Point, Stroke } from '../types';
-import { generateId, distance, smoothStroke } from '../utils';
-import { predictShape } from '../shapePredict';
-import { DynamicStrokeAnalyzer } from '../strokeAnalysis';
+import { generateId, distance } from '../utils';
+import './DrawingCanvas.css';
 
 interface CanvasProps {
   onStrokeComplete?: (stroke: Stroke) => void;
@@ -12,18 +10,8 @@ interface CanvasProps {
 
 export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const sceneRef = useRef<THREE.Scene | null>(null);
-  const cameraRef = useRef<THREE.OrthographicCamera | null>(null);
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const strokeLinesRef = useRef<Map<string, THREE.Group>>(new Map());
-  const previewLineRef = useRef<THREE.Group | null>(null);
-  const gridRef = useRef<THREE.GridHelper | null>(null);
-  const xAxisRef = useRef<THREE.Line | null>(null);
-  const yAxisRef = useRef<THREE.Line | null>(null);
-  const xArrowRef = useRef<THREE.Line | null>(null);
-  const yArrowRef = useRef<THREE.Line | null>(null);
-  const axisLabelsRef = useRef<THREE.Sprite[]>([]);
-  const updateAxisLabelsRef = useRef<((panX: number, panY: number) => void) | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animationFrameRef = useRef<number | null>(null);
 
   const [isDrawing, setIsDrawing] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
@@ -31,396 +19,135 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [currentStrokePoints, setCurrentStrokePoints] = useState<Point[]>([]);
-  const strokeAnalyzer = useRef<DynamicStrokeAnalyzer>(new DynamicStrokeAnalyzer());
 
+  const strokesRef = useRef<Stroke[]>([]);
   const store = useDrawingStore();
+  const panRef = useRef({ x: store.panX, y: store.panY, zoom: store.zoom });
+  const brushSettingsRef = useRef(store.currentBrushSettings);
 
-  // Initialize Three.js scene (single canvas only; avoid double canvas from React Strict Mode)
   useEffect(() => {
-    if (!containerRef.current) return;
+    strokesRef.current = store.strokes;
+  }, [store.strokes]);
+
+  useEffect(() => {
+    panRef.current = { x: store.panX, y: store.panY, zoom: store.zoom };
+  }, [store.panX, store.panY, store.zoom]);
+
+  useEffect(() => {
+    brushSettingsRef.current = store.currentBrushSettings;
+  }, [store.currentBrushSettings]);
+
+  const worldToScreen = useCallback((x: number, y: number) => {
+    const { x: panX, y: panY, zoom } = panRef.current;
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const width = canvas.width / (window.devicePixelRatio || 1);
+    const height = canvas.height / (window.devicePixelRatio || 1);
+    return {
+      x: (x - panX) * zoom + width / 2,
+      y: height / 2 - (y - panY) * zoom
+    };
+  }, []);
+
+  const screenToWorld = useCallback((screenX: number, screenY: number) => {
+    const { x: panX, y: panY, zoom } = panRef.current;
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const width = canvas.width / (window.devicePixelRatio || 1);
+    const height = canvas.height / (window.devicePixelRatio || 1);
+    return {
+      x: (screenX - width / 2) / zoom + panX,
+      y: (height / 2 - screenY) / zoom + panY
+    };
+  }, []);
+
+  const render = useCallback(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.width / dpr;
+    const height = canvas.height / dpr;
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+
+    ctx.fillStyle = '#f8f9fa';
+    ctx.fillRect(0, 0, width, height);
+
+    drawGrid(ctx, width, height, panRef.current);
+
+    strokesRef.current.forEach((stroke) => {
+      const points = stroke.displayPoints ?? stroke.smoothedPoints;
+      if (points.length < 2) return;
+      drawStroke(ctx, points, stroke.color, stroke.thickness, worldToScreen, 1);
+    });
+
+    if (currentStrokePoints.length > 1) {
+      drawStroke(ctx, currentStrokePoints, store.currentColor, store.currentBrushSettings.size, worldToScreen, 0.6);
+    }
+  }, [currentStrokePoints, store.currentColor, store.currentBrushSettings.size, worldToScreen]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
     const container = containerRef.current;
-    // Remove any existing canvas(es) so we never have two (e.g. from Strict Mode double-mount)
-    while (container.firstChild) {
-      container.removeChild(container.firstChild);
-    }
+    if (!container) return;
 
-    const width = container.clientWidth;
-    const height = container.clientHeight;
-
-    // Scene setup with enhanced background
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf8f9fa);
-    sceneRef.current = scene;
-
-    const updateCameraFrustum = (cam: THREE.OrthographicCamera, w: number, h: number, zoom: number) => {
-      const half = 50 / zoom;
-      const aspect = w / h;
-      const { panX, panY } = useDrawingStore.getState();
-      if (aspect >= 1) {
-        cam.left = -half * aspect + panX;
-        cam.right = half * aspect + panX;
-        cam.top = half + panY;
-        cam.bottom = -half + panY;
-      } else {
-        cam.left = -half + panX;
-        cam.right = half + panX;
-        cam.top = half / aspect + panY;
-        cam.bottom = -half / aspect + panY;
-      }
-      cam.updateProjectionMatrix();
+    const resize = () => {
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = container.clientWidth * dpr;
+      canvas.height = container.clientHeight * dpr;
+      canvas.style.width = `${container.clientWidth}px`;
+      canvas.style.height = `${container.clientHeight}px`;
     };
 
-    // Camera setup (orthographic for 2D) — frustum set by updateCameraFrustum so aspect is correct (circle stays circle)
-    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1000);
-    camera.position.set(0, 0, 10);
-    camera.lookAt(0, 0, 0);
-    cameraRef.current = camera;
-    updateCameraFrustum(camera, width, height, useDrawingStore.getState().zoom);
+    resize();
+    window.addEventListener('resize', resize);
 
-    // Renderer setup
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setSize(width, height);
-    renderer.setPixelRatio(window.devicePixelRatio);
-    container.appendChild(renderer.domElement);
-    rendererRef.current = renderer;
-
-    // Create number sprite for axis labels
-    const createNumberSprite = (num: number, color: string): THREE.Sprite => {
-      const canvas = document.createElement('canvas');
-      const size = 64;
-      canvas.width = size;
-      canvas.height = size;
-      const ctx = canvas.getContext('2d')!;
-      ctx.fillStyle = color;
-      ctx.font = 'bold 32px Roboto, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(num.toString(), size / 2, size / 2);
-      
-      const texture = new THREE.CanvasTexture(canvas);
-      const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
-      const sprite = new THREE.Sprite(material);
-      sprite.scale.set(3, 3, 1);
-      return sprite;
-    };
-
-    // Update axis labels based on current viewport
-    const updateAxisLabels = (panX: number, panY: number) => {
-      const currentScene = sceneRef.current;
-      const currentContainer = containerRef.current;
-      if (!currentScene || !currentContainer) return;
-      
-      // Remove old labels
-      axisLabelsRef.current.forEach(label => {
-        currentScene.remove(label);
-        label.material.dispose();
-        if (label.material.map) (label.material.map as THREE.Texture).dispose();
-      });
-      axisLabelsRef.current = [];
-
-      // Calculate visible range based on zoom
-      const halfWidth = 50 / store.zoom;
-      const halfHeight = halfWidth * (currentContainer.clientHeight / currentContainer.clientWidth);
-      
-      // Determine label interval based on zoom level
-      let interval = 10;
-      if (store.zoom < 0.3) interval = 50;
-      else if (store.zoom < 0.6) interval = 20;
-      else if (store.zoom > 2) interval = 5;
-
-      // Add X-axis labels for visible range
-      const startX = Math.floor((panX - halfWidth) / interval) * interval;
-      const endX = Math.ceil((panX + halfWidth) / interval) * interval;
-      
-      for (let i = startX; i <= endX; i += interval) {
-        if (i === 0) continue;
-        const sprite = createNumberSprite(i, '#cc0000');
-        sprite.position.set(i, -4, 0);
-        currentScene.add(sprite);
-        axisLabelsRef.current.push(sprite);
-      }
-
-      // Add Y-axis labels for visible range
-      const startY = Math.floor((panY - halfHeight) / interval) * interval;
-      const endY = Math.ceil((panY + halfHeight) / interval) * interval;
-      
-      for (let i = startY; i <= endY; i += interval) {
-        if (i === 0) continue;
-        const sprite = createNumberSprite(i, '#00aa00');
-        sprite.position.set(-4, i, 0);
-        currentScene.add(sprite);
-        axisLabelsRef.current.push(sprite);
-      }
-
-      // Add origin label
-      const originSprite = createNumberSprite(0, '#000000');
-      originSprite.position.set(-4, -4, 0);
-      currentScene.add(originSprite);
-      axisLabelsRef.current.push(originSprite);
-    };
-
-    // Store update function ref for use in handlers
-    updateAxisLabelsRef.current = updateAxisLabels;
-
-    // Initial axis labels
-    updateAxisLabels(0, 0);
-
-    // Add grid and axes (fixed at world origin, not moving with pan)
-    const addGridAndAxes = (scene: THREE.Scene) => {
-      // Large grid for infinite-like effect
-      const gridSize = 2000;
-      const gridDivisions = 200;
-      const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0xdddddd, 0xf0f0f0);
-      gridHelper.rotation.x = Math.PI / 2;
-      gridHelper.position.z = -1;
-      scene.add(gridHelper);
-      gridRef.current = gridHelper;
-
-      // X-axis (red) - extends far
-      const xAxisLength = 1000;
-      const xGeometry = new THREE.BufferGeometry();
-      xGeometry.setAttribute(
-        'position',
-        new THREE.BufferAttribute(new Float32Array([-xAxisLength, 0, 0, xAxisLength, 0, 0]), 3)
-      );
-      const xMaterial = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 2 });
-      const xAxis = new THREE.Line(xGeometry, xMaterial);
-      scene.add(xAxis);
-      xAxisRef.current = xAxis;
-
-      // X-axis arrow
-      const xArrowGeometry = new THREE.BufferGeometry();
-      xArrowGeometry.setAttribute(
-        'position',
-        new THREE.BufferAttribute(new Float32Array([xAxisLength - 5, -2, 0, xAxisLength, 0, 0, xAxisLength - 5, 2, 0]), 3)
-      );
-      const xArrow = new THREE.Line(xArrowGeometry, xMaterial);
-      scene.add(xArrow);
-      xArrowRef.current = xArrow;
-
-      // Y-axis (green) - extends far
-      const yGeometry = new THREE.BufferGeometry();
-      yGeometry.setAttribute(
-        'position',
-        new THREE.BufferAttribute(new Float32Array([0, -xAxisLength, 0, 0, xAxisLength, 0]), 3)
-      );
-      const yMaterial = new THREE.LineBasicMaterial({ color: 0x00aa00, linewidth: 2 });
-      const yAxis = new THREE.Line(yGeometry, yMaterial);
-      scene.add(yAxis);
-      yAxisRef.current = yAxis;
-
-      // Y-axis arrow
-      const yArrowGeometry = new THREE.BufferGeometry();
-      yArrowGeometry.setAttribute(
-        'position',
-        new THREE.BufferAttribute(new Float32Array([-2, xAxisLength - 5, 0, 0, xAxisLength, 0, 2, xAxisLength - 5, 0]), 3)
-      );
-      const yArrow = new THREE.Line(yArrowGeometry, yMaterial);
-      scene.add(yArrow);
-      yArrowRef.current = yArrow;
-
-      // Initial axis labels
-      updateAxisLabels(0, 0);
-    };
-
-    addGridAndAxes(scene);
-
-    // Add lighting for 3D strokes
-    const light = new THREE.DirectionalLight(0xffffff, 1);
-    light.position.set(10, 10, 10);
-    scene.add(light);
-    
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-    scene.add(ambientLight);
-
-    // DEBUG: Add a small red sphere at origin to verify rendering
-    const testGeometry = new THREE.SphereGeometry(0.5, 16, 16);
-    const testMaterial = new THREE.MeshPhongMaterial({ color: 0xff0000 });
-    const testSphere = new THREE.Mesh(testGeometry, testMaterial);
-    testSphere.position.set(0, 0, 0);
-    scene.add(testSphere);
-
-    // Render loop
     const animate = () => {
-      requestAnimationFrame(animate);
-      renderer.render(scene, camera);
+      render();
+      animationFrameRef.current = requestAnimationFrame(animate);
     };
     animate();
 
-    // Handle window resize — update size and camera frustum so grid/canvas refresh correctly
-    const handleResize = () => {
-      const w = containerRef.current?.clientWidth ?? width;
-      const h = containerRef.current?.clientHeight ?? height;
-      renderer.setSize(w, h);
-      updateCameraFrustum(camera, w, h, useDrawingStore.getState().zoom);
-    };
-    window.addEventListener('resize', handleResize);
-
     return () => {
-      console.log('Cleaning up Three.js scene');
-      window.removeEventListener('resize', handleResize);
-      const canvas = renderer.domElement;
-      if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
-      renderer.dispose();
-    };
-  }, []);  // Empty dependency array - only initialize once
-
-  // Create tube geometry only (for updating existing mesh in place — avoids flicker)
-  const createTubeGeometryFromPoints = (
-    points: Point[],
-    radius: number,
-    z = 0.1
-  ): THREE.TubeGeometry | null => {
-    if (points.length < 2) return null;
-    
-    // Create a curve that uses ALL our points directly, no Three.js smoothing
-    const vecs = points.map((p) => new THREE.Vector3(p.x, p.y, z));
-    const curve = new THREE.CatmullRomCurve3(vecs, false, 'chordal', 0.0); // chordal type preserves point distribution
-    
-    // Use as many segments as points to capture all our smoothness
-    const tubularSegments = Math.min(points.length - 1, 1024); // Higher cap for ultra-smooth
-    const radialSegments = 32; // Even higher for maximum smoothness
-    
-    console.log(`Creating tube with ${tubularSegments} segments from ${points.length} points`);
-    
-    return new THREE.TubeGeometry(curve, tubularSegments, radius, radialSegments);
-  };
-
-
-
-  // Create a single continuous tube mesh from points (no segments/dots — one smooth line)
-  const createTubeFromPoints = useCallback((
-    points: Point[],
-    radius: number,
-    color: number,
-    opacity = 1,
-    z = 0.1
-  ): THREE.Mesh | null => {
-    const geometry = createTubeGeometryFromPoints(points, radius, z);
-    if (!geometry) return null;
-    const material = new THREE.MeshBasicMaterial({
-      color,
-      toneMapped: false,
-      transparent: opacity < 1,
-      opacity,
-    });
-    return new THREE.Mesh(geometry, material);
-  }, []);
-
-  
-
-
-
-  // Render finalized strokes as single continuous tubes (smoothed points, no segments/dots)
-  useEffect(() => {
-    if (!sceneRef.current) return;
-
-    strokeLinesRef.current.forEach((group) => {
-      sceneRef.current?.remove(group);
-      group.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.geometry.dispose();
-          (child.material as THREE.Material).dispose();
-        }
-      });
-    });
-    strokeLinesRef.current.clear();
-
-    store.strokes.forEach((stroke) => {
-      const points =
-        stroke.displayPoints ??
-        (stroke.smoothedPoints.length >= 2 ? stroke.smoothedPoints : stroke.points);
-      
-      console.log(`Rendering stroke: using ${points.length} points (displayPoints: ${stroke.displayPoints?.length}, smoothedPoints: ${stroke.smoothedPoints.length}, original: ${stroke.points.length})`);
-      
-      if (points.length < 2) return;
-
-      let colorNum = parseInt(stroke.color.replace('#', ''), 16);
-      if (colorNum === 0) colorNum = 0x222222;
-      // Convert thickness to much smaller radius for proper visual scaling
-      // 2px thickness -> 0.1 radius, scaled down significantly
-      const radius = Math.max(stroke.thickness * 0.05, 0.05);
-
-      // Highlight selected stroke
-      const isSelected = store.selectedStrokeIds.includes(stroke.id);
-      const finalOpacity = isSelected ? 0.6 : 1.0;
-      const finalZ = isSelected ? 0.15 : 0.1; // Raise selected stroke slightly
-      
-      const mesh = createTubeFromPoints(points, radius, colorNum, finalOpacity, finalZ);
-      if (!mesh || !sceneRef.current) return;
-      
-      // Add selection indicator (glow effect)
-      if (isSelected) {
-        // const glowRadius = radius + 1.5;
-        const glowRadius = Math.max(stroke.thickness * 0.05, 0.05) + 1.5;
-        const glowMesh = createTubeFromPoints(points, glowRadius, 0x00ff00, 0.3, 0.16);
-        if (glowMesh) {
-          const strokeGroup = new THREE.Group();
-          strokeGroup.add(glowMesh);
-          strokeGroup.add(mesh);
-          strokeGroup.userData.strokeId = stroke.id;
-          sceneRef.current.add(strokeGroup);
-          strokeLinesRef.current.set(stroke.id, strokeGroup);
-          return;
-        }
+      window.removeEventListener('resize', resize);
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
       }
-      
-      const strokeGroup = new THREE.Group();
-      strokeGroup.add(mesh);
-      strokeGroup.userData.strokeId = stroke.id;
-      sceneRef.current.add(strokeGroup);
-      strokeLinesRef.current.set(stroke.id, strokeGroup);
-    });
-  }, [store.strokes, store.selectedStrokeIds, createTubeFromPoints]);
+    };
+  }, [render]);
 
-  // Screen to world using current camera frustum (correct after zoom/resize)
-  const screenToWorld = useCallback((clientX: number, clientY: number): { x: number; y: number } | null => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    const cam = cameraRef.current;
-    if (!rect || !cam) return null;
-    const u = (clientX - rect.left) / rect.width;
-    const v = (clientY - rect.top) / rect.height;
-    const x = cam.left + u * (cam.right - cam.left);
-    const y = cam.top - v * (cam.top - cam.bottom);
-    return { x, y };
-  }, []);
-
-  /**
-   * Calculate distance from point to line segment.
-   */
   const distanceToSegment = useCallback((point: { x: number; y: number }, segStart: Point, segEnd: Point): number => {
     const dx = segEnd.x - segStart.x;
     const dy = segEnd.y - segStart.y;
     const lenSq = dx * dx + dy * dy;
-    
+
     if (lenSq < 1e-10) {
       return Math.hypot(point.x - segStart.x, point.y - segStart.y);
     }
-    
+
     let t = ((point.x - segStart.x) * dx + (point.y - segStart.y) * dy) / lenSq;
     t = Math.max(0, Math.min(1, t));
-    
+
     const projX = segStart.x + t * dx;
     const projY = segStart.y + t * dy;
-    
+
     return Math.hypot(point.x - projX, point.y - projY);
   }, []);
 
-  /**
-   * Find which stroke is at the given world position.
-   * Searches in reverse order to find topmost stroke first.
-   */
   const findStrokeAtPosition = useCallback((world: { x: number; y: number }): string | null => {
-    const clickThreshold = 5.0; // Distance threshold for picking strokes
-    
-    // Iterate in reverse to find topmost stroke first
-    for (let i = store.strokes.length - 1; i >= 0; i--) {
-      const stroke = store.strokes[i];
+    const { zoom } = panRef.current;
+    const clickThreshold = 5.0 / zoom;
+
+    for (let i = strokesRef.current.length - 1; i >= 0; i--) {
+      const stroke = strokesRef.current[i];
       const points = stroke.displayPoints ?? stroke.smoothedPoints;
       if (points.length < 2) continue;
-      
-      // Check distance from click point to stroke segments
+
       for (let j = 0; j < points.length - 1; j++) {
         const dist = distanceToSegment(world, points[j], points[j + 1]);
         if (dist <= clickThreshold) {
@@ -428,12 +155,11 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         }
       }
     }
-    
+
     return null;
-  }, [store.strokes, distanceToSegment]);
+  }, [distanceToSegment]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    // Middle mouse button - start pan mode
     if (e.button === 1) {
       e.preventDefault();
       setIsPanning(true);
@@ -442,317 +168,142 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     }
 
     if (e.button !== 0) return;
-    const world = screenToWorld(e.clientX, e.clientY);
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const screenX = e.clientX - rect.left;
+    const screenY = e.clientY - rect.top;
+    const world = screenToWorld(screenX, screenY);
+
     if (!world) return;
-    
-    const currentStore = useDrawingStore.getState();
-    
-    // Select mode: handle selection
-    if (currentStore.mode === 'select') {
+
+    if (store.mode === 'select') {
       const clickedStrokeId = findStrokeAtPosition(world);
-      
+
       if (e.ctrlKey || e.metaKey) {
-        // Ctrl+Click: toggle selection
         if (clickedStrokeId) {
-          currentStore.toggleSelection(clickedStrokeId);
+          store.toggleSelection(clickedStrokeId);
         }
       } else if (clickedStrokeId) {
-        // Click on stroke: select it (or add to selection if already selected)
-        currentStore.setSelectedStrokeIds([clickedStrokeId]);
+        store.setSelectedStrokeIds([clickedStrokeId]);
       } else {
-        // Click on empty space: clear selection
-        currentStore.clearSelection();
+        store.clearSelection();
       }
-      
-      // Start drag operation for selected strokes
-      if (currentStore.selectedStrokeIds.length > 0 || clickedStrokeId) {
+
+      if (store.selectedStrokeIds.length > 0 || clickedStrokeId) {
         setIsDragging(true);
         setDragStart(world);
       }
       return;
     }
-    
-    // Draw mode: start drawing
+
     const timestamp = Date.now();
     setIsDrawing(true);
-    setCurrentStrokePoints([world]);
-    
-    // Reset stroke analyzer for new stroke
-    strokeAnalyzer.current.reset();
-    strokeAnalyzer.current.addPoint({ ...world, timestamp });
-  }, [screenToWorld, findStrokeAtPosition]);
+    setCurrentStrokePoints([{ ...world, timestamp }]);
+  }, [store, screenToWorld, findStrokeAtPosition]);
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    // Handle panning
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const screenX = e.clientX - rect.left;
+    const screenY = e.clientY - rect.top;
+    const world = screenToWorld(screenX, screenY);
+
     if (isPanning) {
       const dx = e.clientX - panStart.x;
       const dy = e.clientY - panStart.y;
-      
-      // Calculate new pan position based on delta
-      const newPanX = store.panX - dx / store.zoom;
-      const newPanY = store.panY + dy / store.zoom;
-      
+      const newPanX = panRef.current.x - dx / panRef.current.zoom;
+      const newPanY = panRef.current.y + dy / panRef.current.zoom;
       store.setPan(newPanX, newPanY);
-      
-      // Update camera frustum to show different part of world
-      const cam = cameraRef.current;
-      const container = containerRef.current;
-      if (cam && container) {
-        const width = container.clientWidth;
-        const height = container.clientHeight;
-        const half = 50 / store.zoom;
-        const aspect = width / height;
-        
-        if (aspect >= 1) {
-          cam.left = -half * aspect + newPanX;
-          cam.right = half * aspect + newPanX;
-          cam.top = half + newPanY;
-          cam.bottom = -half + newPanY;
-        } else {
-          cam.left = -half + newPanX;
-          cam.right = half + newPanX;
-          cam.top = half / aspect + newPanY;
-          cam.bottom = -half / aspect + newPanY;
-        }
-        cam.updateProjectionMatrix();
-      }
-      
-      // Update axis labels for new viewport
-      if (updateAxisLabelsRef.current) {
-        updateAxisLabelsRef.current(newPanX, newPanY);
-      }
-      
       setPanStart({ x: e.clientX, y: e.clientY });
       return;
     }
-    
-    // Handle dragging selected strokes in select mode
+
     if (isDragging && store.mode === 'select' && store.selectedStrokeIds.length > 0) {
-      const world = screenToWorld(e.clientX, e.clientY);
       if (!world) return;
-      
       const dx = world.x - dragStart.x;
       const dy = world.y - dragStart.y;
-      
-      // Move selected strokes visually (not committed to store yet)
       store.selectedStrokeIds.forEach((strokeId) => {
-        const strokeGroup = strokeLinesRef.current.get(strokeId);
-        if (strokeGroup) {
-          strokeGroup.position.set(dx, dy, 0);
+        const stroke = strokesRef.current.find((s) => s.id === strokeId);
+        if (stroke) {
+          const movePoints = (points: Point[]): Point[] =>
+            points.map((p) => ({ x: p.x + dx, y: p.y + dy, timestamp: p.timestamp }));
+          store.updateStroke(strokeId, {
+            ...stroke,
+            points: movePoints(stroke.points),
+            smoothedPoints: movePoints(stroke.smoothedPoints),
+            displayPoints: stroke.displayPoints ? movePoints(stroke.displayPoints) : undefined,
+          });
         }
       });
+      setDragStart(world);
       return;
     }
-    
-    if (!isDrawing) return;
-    const world = screenToWorld(e.clientX, e.clientY);
-    if (!world) return;
-    const x = world.x;
-    const y = world.y;
+
+    if (!isDrawing || !world) return;
 
     const lastPoint = currentStrokePoints[currentStrokePoints.length - 1];
-
-    // Only add point if distance is > 0.1cm (capture more points for smoother input)
-    if (distance(lastPoint, { x, y }) > 0.1) {
-      const newPoints = [...currentStrokePoints, { x, y }];
-      setCurrentStrokePoints(newPoints);
-      
-      // Add point to stroke analyzer for velocity tracking
-      strokeAnalyzer.current.addPoint({ x, y, timestamp: Date.now() });
-
-      // Render preview (single continuous tube) - draw preview line while user is drawing
-      if (!sceneRef.current) return;
-
-      const colorNum_raw = parseInt(store.currentColor.replace('#', ''), 16);
-      const colorNum = colorNum_raw === 0 ? 0x222222 : colorNum_raw;
-      // Use same scaling as final strokes
-      const thickness = Math.max(store.currentThickness * 0.05, 0.05);
-      const newGeometry = createTubeGeometryFromPoints(newPoints, thickness, 0.05);
-
-      if (!newGeometry) return;
-
-      // Update existing preview mesh in place (no remove/re-add) to avoid flicker
-      const existing = previewLineRef.current;
-      if (existing && existing.children.length > 0) {
-        const mesh = existing.children[0] as THREE.Mesh;
-        if (mesh.geometry) mesh.geometry.dispose();
-        mesh.geometry = newGeometry;
-      } else {
-        const material = new THREE.MeshBasicMaterial({
-          color: colorNum,
-          toneMapped: false,
-          transparent: true,
-          opacity: 0.7,
-        });
-        const previewMesh = new THREE.Mesh(newGeometry, material);
-        const group = new THREE.Group();
-        group.add(previewMesh);
-        previewLineRef.current = group;
-        sceneRef.current.add(group);
-      }
+    if (distance(lastPoint, world) > 0.1) {
+      setCurrentStrokePoints((prev) => [...prev, { ...world, timestamp: Date.now() }]);
     }
-  };
+  }, [isPanning, isDragging, isDrawing, panStart, store, screenToWorld, currentStrokePoints, dragStart]);
 
-  const handleMouseUp = () => {
-    // End pan mode
+  const handleMouseUp = useCallback(() => {
     if (isPanning) {
       setIsPanning(false);
       return;
     }
-    
-    // End drag mode - commit moved strokes to store
-    if (isDragging && store.mode === 'select' && store.selectedStrokeIds.length > 0) {
-      // Reset stroke group positions and commit to store
-      const updates: { id: string; stroke: Stroke }[] = [];
-      store.selectedStrokeIds.forEach((strokeId) => {
-        const strokeGroup = strokeLinesRef.current.get(strokeId);
-        const originalStroke = store.strokes.find(s => s.id === strokeId);
-        if (strokeGroup && originalStroke) {
-          const dx = strokeGroup.position.x;
-          const dy = strokeGroup.position.y;
-          
-          // Reset visual position
-          strokeGroup.position.set(0, 0, 0);
-          
-          // Only commit if there was actual movement
-          if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
-            // Create updated stroke with moved points
-            const movePoints = (points: Point[]): Point[] => 
-              points.map(p => ({ x: p.x + dx, y: p.y + dy, timestamp: p.timestamp }));
-            
-            updates.push({
-              id: strokeId,
-              stroke: {
-                ...originalStroke,
-                points: movePoints(originalStroke.points),
-                smoothedPoints: movePoints(originalStroke.smoothedPoints),
-                displayPoints: originalStroke.displayPoints ? movePoints(originalStroke.displayPoints) : undefined,
-              },
-            });
-          }
-        }
-      });
-      
-      if (updates.length > 0) {
-        store.updateStrokes(updates);
-      }
-      
+
+    if (isDragging && store.mode === 'select') {
       setIsDragging(false);
       setDragStart({ x: 0, y: 0 });
       return;
     }
-    
+
     if (!isDrawing) return;
 
     setIsDrawing(false);
 
-    // Clear preview
-    if (previewLineRef.current && sceneRef.current) {
-      sceneRef.current.remove(previewLineRef.current);
-      previewLineRef.current.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.geometry.dispose();
-          (child.material as THREE.Material).dispose();
-        }
-      });
-      previewLineRef.current = null;
-    }
-
-    // Finalize: analyze stroke for velocity-based corners, then smooth and predict shape
     if (currentStrokePoints.length > 1) {
-      const rawPoints = currentStrokePoints;
-      
-      // Analyze stroke for velocity-based corner detection
-      const analysis = strokeAnalyzer.current.analyze();
-      
-      // DETECTION-FIRST: Predict what user intended to draw BEFORE any smoothing
-      let pointsForPrediction = rawPoints;
-      if (analysis.isMultiline && analysis.corners.length > 0) {
-        // Use corner points as key points for shape prediction
-        const cornerPoints = analysis.corners.map(idx => rawPoints[idx]);
-        // Add start and end points if not already included
-        if (!cornerPoints.includes(rawPoints[0])) cornerPoints.unshift(rawPoints[0]);
-        if (!cornerPoints.includes(rawPoints[rawPoints.length - 1])) cornerPoints.push(rawPoints[rawPoints.length - 1]);
-        pointsForPrediction = cornerPoints;
-      }
-      
-      // RESPECT INDIVIDUAL OPTIONS: Apply detection and smoothing based on user settings
-      
-      let finalPoints: Point[] = rawPoints; // Default to raw input
-      let displayPoints: Point[] | undefined;
-
-      // STEP 1: Apply prediction if enabled
-      if (store.predictEnabled) {
-        const predicted = predictShape(pointsForPrediction);
-        if (predicted) {
-          // Shape detected - use predicted points for display
-          finalPoints = pointsForPrediction; // Keep original for consistent strokes
-          displayPoints = predicted;
-        }
-      }
-      
-      // STEP 2: Apply smoothing if enabled AND no shape was detected
-      if (store.smoothEnabled && !displayPoints) {
-        const beforeLength = finalPoints.length;
-        finalPoints = smoothStroke(finalPoints);
-        const afterLength = finalPoints.length;
-        console.log(`Smoothing applied: ${beforeLength} -> ${afterLength} points`);
-        
-        // DEBUG: Also create unsmoothed version for comparison
-        console.log('Original points (first 5):', rawPoints.slice(0, 5).map(p => `(${p.x.toFixed(1)}, ${p.y.toFixed(1)})`));
-        console.log('Smoothed points (first 5):', finalPoints.slice(0, 5).map(p => `(${p.x.toFixed(1)}, ${p.y.toFixed(1)})`));
-      }
-
       const stroke: Stroke = {
         id: generateId(),
-        points: rawPoints,
-        smoothedPoints: finalPoints,
+        points: currentStrokePoints,
+        smoothedPoints: currentStrokePoints,
         color: store.currentColor,
-        thickness: store.currentThickness,
+        thickness: store.currentBrushSettings.size,
         timestamp: Date.now(),
+        brushType: store.currentBrushType,
+        brushSettings: {
+          size: store.currentBrushSettings.size,
+          opacity: store.currentBrushSettings.opacity,
+          hardness: store.currentBrushSettings.hardness,
+          spacing: store.currentBrushSettings.spacing,
+          curvatureAdaptation: store.currentBrushSettings.curvatureAdaptation,
+        },
       };
-
-      // Store the display points if shape was predicted
-      if (displayPoints) {
-        stroke.displayPoints = displayPoints;
-      }
 
       store.addStroke(stroke);
       onStrokeComplete?.(stroke);
     }
 
     setCurrentStrokePoints([]);
-  };
+  }, [isPanning, isDragging, isDrawing, currentStrokePoints, store, onStrokeComplete]);
 
-  // Wheel zoom — native listener with { passive: false } so preventDefault() works (React's onWheel is passive)
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const delta = e.deltaY > 0 ? -0.1 : 0.1;
       const newZoom = store.zoom + delta;
       store.setZoom(newZoom);
-      const cam = cameraRef.current;
-      if (cam && containerRef.current) {
-        const c = containerRef.current;
-        const half = 50 / newZoom;
-        const aspect = c.clientWidth / c.clientHeight;
-        const { panX, panY } = store;
-        if (aspect >= 1) {
-          cam.left = -half * aspect + panX;
-          cam.right = half * aspect + panX;
-          cam.top = half + panY;
-          cam.bottom = -half + panY;
-        } else {
-          cam.left = -half + panX;
-          cam.right = half + panX;
-          cam.top = half / aspect + panY;
-          cam.bottom = -half / aspect + panY;
-        }
-        cam.updateProjectionMatrix();
-      }
     };
+
     container.addEventListener('wheel', onWheel, { passive: false });
     return () => container.removeEventListener('wheel', onWheel);
   }, [store]);
@@ -760,15 +311,119 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
   return (
     <div
       ref={containerRef}
-      style={{
-        width: '100%',
-        height: 'calc(100vh - 60px)',
-        cursor: isPanning ? 'grabbing' : 'crosshair',
-      }}
+      className="canvas-container"
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
-    />
+    >
+      <canvas ref={canvasRef} className="drawing-canvas" />
+    </div>
   );
 };
+
+function drawGrid(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  pan: { x: number; y: number; zoom: number }
+): void {
+  const { x: panX, y: panY, zoom } = pan;
+  const gridSize = 10;
+  const gridExtent = 100;
+
+  ctx.strokeStyle = '#e0e0e0';
+  ctx.lineWidth = 1;
+
+  const halfWidth = width / 2;
+  const halfHeight = height / 2;
+
+  for (let i = -gridExtent; i <= gridExtent; i += gridSize) {
+    const worldX = i;
+    const screenX = (worldX - panX) * zoom + halfWidth;
+
+    if (screenX >= 0 && screenX <= width) {
+      ctx.beginPath();
+      ctx.moveTo(screenX, 0);
+      ctx.lineTo(screenX, height);
+      ctx.stroke();
+    }
+
+    const screenY = halfHeight - (worldX - panY) * zoom;
+    if (screenY >= 0 && screenY <= height) {
+      ctx.beginPath();
+      ctx.moveTo(0, screenY);
+      ctx.lineTo(width, screenY);
+      ctx.stroke();
+    }
+  }
+
+  ctx.strokeStyle = '#b0b0b0';
+  ctx.lineWidth = 2;
+
+  const originX = (0 - panX) * zoom + halfWidth;
+  const originY = halfHeight - (0 - panY) * zoom;
+
+  if (originX >= 0 && originX <= width) {
+    ctx.beginPath();
+    ctx.moveTo(originX, 0);
+    ctx.lineTo(originX, height);
+    ctx.stroke();
+  }
+
+  if (originY >= 0 && originY <= height) {
+    ctx.beginPath();
+    ctx.moveTo(0, originY);
+    ctx.lineTo(width, originY);
+    ctx.stroke();
+  }
+}
+
+function drawStroke(
+  ctx: CanvasRenderingContext2D,
+  points: Point[],
+  color: string,
+  thickness: number,
+  worldToScreen: (x: number, y: number) => { x: number; y: number },
+  opacity: number
+): void {
+  if (points.length < 2) return;
+
+  ctx.fillStyle = color;
+  ctx.globalAlpha = opacity;
+
+  const radius = thickness / 2;
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const p1 = worldToScreen(points[i].x, points[i].y);
+    const p2 = worldToScreen(points[i + 1].x, points[i + 1].y);
+
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < 0.5) {
+      ctx.beginPath();
+      ctx.arc(p1.x, p1.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      continue;
+    }
+
+    const numSteps = Math.max(1, Math.ceil(dist / (radius * 0.5)));
+    for (let j = 0; j <= numSteps; j++) {
+      const t = j / numSteps;
+      const x = p1.x + dx * t;
+      const y = p1.y + dy * t;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  const lastPoint = worldToScreen(points[points.length - 1].x, points[points.length - 1].y);
+  ctx.beginPath();
+  ctx.arc(lastPoint.x, lastPoint.y, radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.globalAlpha = 1;
+}

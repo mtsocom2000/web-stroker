@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Stroke, CanvasState } from './types';
+import type { BrushType, BrushSettings } from './brush/presets';
 
 type DrawingMode = 'select' | 'draw';
 
@@ -33,7 +34,7 @@ interface DrawingState {
   setZoom: (zoom: number) => void;
   setPan: (panX: number, panY: number) => void;
 
-  // Drawing tools
+  // Drawing tools (legacy - for backward compatibility)
   currentColor: string;
   currentThickness: number;
   setColor: (color: string) => void;
@@ -43,9 +44,17 @@ interface DrawingState {
   predictEnabled: boolean;
   setPredictEnabled: (enabled: boolean) => void;
 
-  // Smooth (stroke smoothing)
+  // Smooth (stroke smoothing) - legacy
   smoothEnabled: boolean;
   setSmoothEnabled: (enabled: boolean) => void;
+
+  // New Brush System
+  currentBrushType: BrushType;
+  currentBrushSettings: BrushSettings;
+  setBrushType: (type: BrushType) => void;
+  setBrushSize: (size: number) => void;
+  setBrushOpacity: (opacity: number) => void;
+  setBrushHardness: (hardness: number) => void;
 
   // Undo/Redo
   history: CanvasState[];
@@ -63,14 +72,21 @@ export const useDrawingStore = create<DrawingState>((set) => {
     zoom: 1,
     panX: 0,
     panY: 0,
-    predictEnabled: false, // Default: unchecked
-    smoothEnabled: true, // Default: checked
+    predictEnabled: false,
+    smoothEnabled: true,
   };
 
-
+  const defaultBrushSettings: BrushSettings = {
+    type: 'pencil',
+    size: 2,
+    opacity: 0.9,
+    pressure: false,
+    hardness: 0.95,
+    spacing: 0.3,
+    curvatureAdaptation: false,
+  };
 
   return {
-    // Initial state
     mode: 'select',
     strokes: [],
     canvasWidth: 100,
@@ -80,11 +96,14 @@ export const useDrawingStore = create<DrawingState>((set) => {
     panY: 0,
     currentColor: '#000000',
     currentThickness: 2,
-    predictEnabled: false, // Default: unchecked
-    smoothEnabled: true, // Default: checked
+    predictEnabled: false,
+    smoothEnabled: true,
     selectedStrokeIds: [],
     history: [initialCanvasState],
     historyIndex: 0,
+
+    currentBrushType: 'pencil',
+    currentBrushSettings: defaultBrushSettings,
 
     // Mode
     setMode: (mode) => set({ mode }),
@@ -236,6 +255,32 @@ export const useDrawingStore = create<DrawingState>((set) => {
 
     setPredictEnabled: (enabled) => set({ predictEnabled: enabled }),
     setSmoothEnabled: (enabled) => set({ smoothEnabled: enabled }),
+
+    // New Brush System
+    setBrushType: (type) => {
+      const presets = {
+        pencil: { type: 'pencil', size: 2, opacity: 0.9, pressure: false, hardness: 0.95, spacing: 0.3, curvatureAdaptation: false },
+        pen: { type: 'pen', size: 1.5, opacity: 0.85, pressure: true, hardness: 0.8, spacing: 0.2, curvatureAdaptation: true },
+        brush: { type: 'brush', size: 8, opacity: 0.4, pressure: true, hardness: 0.3, spacing: 0.15, curvatureAdaptation: true },
+        ballpen: { type: 'ballpen', size: 1, opacity: 0.7, pressure: false, hardness: 0.6, spacing: 0.25, curvatureAdaptation: false },
+      };
+      set({
+        currentBrushType: type,
+        currentBrushSettings: presets[type] as BrushSettings,
+      });
+    },
+    setBrushSize: (size) =>
+      set((state) => ({
+        currentBrushSettings: { ...state.currentBrushSettings, size },
+      })),
+    setBrushOpacity: (opacity) =>
+      set((state) => ({
+        currentBrushSettings: { ...state.currentBrushSettings, opacity },
+      })),
+    setBrushHardness: (hardness) =>
+      set((state) => ({
+        currentBrushSettings: { ...state.currentBrushSettings, hardness },
+      })),
 
     // Drawing tools
     setColor: (color) => set({ currentColor: color }),

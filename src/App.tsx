@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import './App.css';
 import { DrawingCanvas } from './components/DrawingCanvas';
 import { PropertyPanel } from './components/PropertyPanel';
+import { DrawToolPanel } from './components/DrawToolPanel';
 import { Toolbar } from './components/Toolbar';
 import { useDrawingStore } from './store';
 
@@ -41,6 +42,7 @@ function App() {
     <div className="app">
       <Toolbar />
       <PropertyPanel />
+      <DrawToolPanel />
       <DrawingCanvas />
     </div>
   );

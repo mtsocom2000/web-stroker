@@ -14,6 +14,15 @@ export interface Stroke {
   color: string;
   thickness: number;
   timestamp: number;
+  /** Brush settings for the new stamp-based rendering */
+  brushType?: string;
+  brushSettings?: {
+    size: number;
+    opacity: number;
+    hardness: number;
+    spacing: number;
+    curvatureAdaptation: boolean;
+  };
 }
 
 export interface CanvasState {
