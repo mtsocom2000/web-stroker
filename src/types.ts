@@ -23,6 +23,21 @@ export interface Stroke {
     spacing: number;
     curvatureAdaptation: boolean;
   };
+  /** Detected corner/characteristic points (for prediction/analysis) */
+  cornerPoints?: Point[];
+  cornerIndices?: number[];
+  /** Segment information for shape detection (Phase 3) */
+  segments?: StrokeSegment[];
+}
+
+export interface StrokeSegment {
+  startIndex: number;
+  endIndex: number;
+  startPoint: Point;
+  endPoint: Point;
+  avgVelocity: number;
+  angle: number;
+  isStraight: boolean;
 }
 
 export interface CanvasState {

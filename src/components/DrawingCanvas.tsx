@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useDrawingStore } from '../store';
 import type { Point, Stroke } from '../types';
 import { generateId, distance } from '../utils';
-import { PhysicsSmoother } from '../brush/physicsSmoothing';
+import { simplifyStroke } from '../brush/strokeSimplifier';
 import './DrawingCanvas.css';
 
 interface CanvasProps {
@@ -271,13 +271,15 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     setIsDrawing(false);
 
     if (currentStrokePoints.length > 1) {
-      const smoother = new PhysicsSmoother();
-      const smoothedPoints = smoother.smooth(currentStrokePoints);
+      const { simplifiedPoints, cornerPoints, cornerIndices, segments } = simplifyStroke(currentStrokePoints);
 
       const stroke: Stroke = {
         id: generateId(),
         points: currentStrokePoints,
-        smoothedPoints: smoothedPoints,
+        smoothedPoints: simplifiedPoints,
+        cornerPoints,
+        cornerIndices,
+        segments,
         color: store.currentColor,
         thickness: store.currentBrushSettings.size,
         timestamp: Date.now(),
