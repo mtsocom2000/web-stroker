@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useDrawingStore } from '../store';
 import type { Point, Stroke } from '../types';
 import { generateId, distance } from '../utils';
+import { PhysicsSmoother } from '../brush/physicsSmoothing';
 import './DrawingCanvas.css';
 
 interface CanvasProps {
@@ -81,13 +82,14 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     strokesRef.current.forEach((stroke) => {
       const points = stroke.displayPoints ?? stroke.smoothedPoints;
       if (points.length < 2) return;
-      drawStroke(ctx, points, stroke.color, stroke.thickness, worldToScreen, 1);
+      const opacity = stroke.brushSettings?.opacity ?? 1;
+      drawStroke(ctx, points, stroke.color, stroke.thickness, worldToScreen, opacity);
     });
 
     if (currentStrokePoints.length > 1) {
-      drawStroke(ctx, currentStrokePoints, store.currentColor, store.currentBrushSettings.size, worldToScreen, 0.6);
+      drawStroke(ctx, currentStrokePoints, store.currentColor, store.currentBrushSettings.size, worldToScreen, store.currentBrushSettings.opacity);
     }
-  }, [currentStrokePoints, store.currentColor, store.currentBrushSettings.size, worldToScreen]);
+  }, [currentStrokePoints, store.currentColor, store.currentBrushSettings.size, store.currentBrushSettings.opacity, worldToScreen]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -269,10 +271,13 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     setIsDrawing(false);
 
     if (currentStrokePoints.length > 1) {
+      const smoother = new PhysicsSmoother();
+      const smoothedPoints = smoother.smooth(currentStrokePoints);
+
       const stroke: Stroke = {
         id: generateId(),
         points: currentStrokePoints,
-        smoothedPoints: currentStrokePoints,
+        smoothedPoints: smoothedPoints,
         color: store.currentColor,
         thickness: store.currentBrushSettings.size,
         timestamp: Date.now(),
@@ -329,40 +334,73 @@ function drawGrid(
   pan: { x: number; y: number; zoom: number }
 ): void {
   const { x: panX, y: panY, zoom } = pan;
-  const gridSize = 10;
-  const gridExtent = 100;
-
-  ctx.strokeStyle = '#e0e0e0';
-  ctx.lineWidth = 1;
+  const gridSize = 50;
+  const majorInterval = 5;
 
   const halfWidth = width / 2;
   const halfHeight = height / 2;
 
-  for (let i = -gridExtent; i <= gridExtent; i += gridSize) {
-    const worldX = i;
+  const visibleLeftWorld = (-halfWidth / zoom) + panX;
+  const visibleRightWorld = (halfWidth / zoom) + panX;
+  const visibleTopWorld = (halfHeight / zoom) + panY;
+  const visibleBottomWorld = (-halfHeight / zoom) + panY;
+
+  const startX = Math.floor(visibleLeftWorld / gridSize) * gridSize;
+  const endX = Math.ceil(visibleRightWorld / gridSize) * gridSize;
+  const startY = Math.floor(visibleBottomWorld / gridSize) * gridSize;
+  const endY = Math.ceil(visibleTopWorld / gridSize) * gridSize;
+
+  ctx.font = '10px sans-serif';
+
+  const originX = (0 - panX) * zoom + halfWidth;
+  const originY = halfHeight - (0 - panY) * zoom;
+
+  for (let worldX = startX; worldX <= endX; worldX += gridSize) {
     const screenX = (worldX - panX) * zoom + halfWidth;
+    const isMajor = worldX === 0 || worldX % (gridSize * majorInterval) === 0;
 
     if (screenX >= 0 && screenX <= width) {
       ctx.beginPath();
       ctx.moveTo(screenX, 0);
       ctx.lineTo(screenX, height);
+      ctx.strokeStyle = isMajor ? '#c0c0c0' : '#e8e8e8';
+      ctx.lineWidth = isMajor ? 1.5 : 1;
       ctx.stroke();
-    }
 
-    const screenY = halfHeight - (worldX - panY) * zoom;
+      if (isMajor) {
+        ctx.fillStyle = '#555';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
+        const labelY = originY + (originY > 0 && originY < height ? 12 : -6);
+        ctx.fillText(Math.round(worldX).toString(), screenX, labelY);
+      }
+    }
+  }
+
+  for (let worldY = startY; worldY <= endY; worldY += gridSize) {
+    const screenY = halfHeight - (worldY - panY) * zoom;
+    const isMajor = worldY === 0 || worldY % (gridSize * majorInterval) === 0;
+
     if (screenY >= 0 && screenY <= height) {
       ctx.beginPath();
       ctx.moveTo(0, screenY);
       ctx.lineTo(width, screenY);
+      ctx.strokeStyle = isMajor ? '#c0c0c0' : '#e8e8e8';
+      ctx.lineWidth = isMajor ? 1.5 : 1;
       ctx.stroke();
+
+      if (isMajor) {
+        ctx.fillStyle = '#555';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        const labelX = originX > 0 && originX < width ? originX - 6 : 12;
+        ctx.fillText(Math.round(worldY).toString(), labelX, screenY);
+      }
     }
   }
 
-  ctx.strokeStyle = '#b0b0b0';
+  ctx.strokeStyle = '#606060';
   ctx.lineWidth = 2;
-
-  const originX = (0 - panX) * zoom + halfWidth;
-  const originY = halfHeight - (0 - panY) * zoom;
 
   if (originX >= 0 && originX <= width) {
     ctx.beginPath();
@@ -376,6 +414,13 @@ function drawGrid(
     ctx.moveTo(0, originY);
     ctx.lineTo(width, originY);
     ctx.stroke();
+  }
+
+  if (originX >= 4 && originX <= width - 4 && originY >= 4 && originY <= height - 4) {
+    ctx.beginPath();
+    ctx.arc(originX, originY, 4, 0, Math.PI * 2);
+    ctx.fillStyle = '#404040';
+    ctx.fill();
   }
 }
 

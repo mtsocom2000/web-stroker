@@ -37,7 +37,7 @@ export const PropertyPanel: React.FC = () => {
 
   const displayThickness = hasSelection && firstSelectedStroke
     ? firstSelectedStroke.thickness
-    : store.currentThickness;
+    : store.currentBrushSettings.size;
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('property-panel-header')) {
@@ -97,7 +97,7 @@ export const PropertyPanel: React.FC = () => {
         }
       });
     } else {
-      store.setThickness(thickness);
+      store.setBrushSize(thickness);
     }
   };
 
