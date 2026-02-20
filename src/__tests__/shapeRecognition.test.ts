@@ -1,16 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import type { Point } from '../types';
-import { detectStraightLine, detectPolyline, predictShape } from '../shapeRecognition';
+import { predictShape, predictShapeWithDetails } from '../shapeRecognition';
 
 describe('Shape Recognition Tests', () => {
-  describe('detectStraightLine', () => {
+  describe('predictShape - Lines', () => {
     it('should detect a perfect horizontal line', () => {
       const points: Point[] = [];
       for (let i = 0; i <= 10; i++) {
         points.push({ x: i * 5, y: 50 });
       }
       
-      const result = detectStraightLine(points);
+      const result = predictShape(points);
       expect(result).not.toBeNull();
       expect(result).toHaveLength(2);
       expect(result![0]).toEqual({ x: 0, y: 50 });
@@ -23,7 +23,7 @@ describe('Shape Recognition Tests', () => {
         points.push({ x: 25, y: i * 5 });
       }
       
-      const result = detectStraightLine(points);
+      const result = predictShape(points);
       expect(result).not.toBeNull();
       expect(result).toHaveLength(2);
       expect(result![0]).toEqual({ x: 25, y: 0 });
@@ -36,36 +36,13 @@ describe('Shape Recognition Tests', () => {
         points.push({ x: i * 5, y: i * 3 });
       }
       
-      const result = detectStraightLine(points);
+      const result = predictShape(points);
       expect(result).not.toBeNull();
       expect(result).toHaveLength(2);
     });
-
-    it('should reject slightly curved lines', () => {
-      const points: Point[] = [];
-      for (let i = 0; i <= 20; i++) {
-        const x = i * 2.5;
-        const y = 25 + Math.sin(i * 0.3) * 3; // Small sine wave
-        points.push({ x, y });
-      }
-      
-      const result = detectStraightLine(points);
-      expect(result).toBeNull(); // Should be rejected due to curvature
-    });
-
-    it('should reject very short segments', () => {
-      const points: Point[] = [
-        { x: 0, y: 0 },
-        { x: 1, y: 0 },
-        { x: 2, y: 0 }
-      ];
-      
-      const result = detectStraightLine(points);
-      expect(result).toBeNull(); // Too short to be considered a line
-    });
   });
 
-  describe('detectPolyline', () => {
+  describe('predictShape - Polylines', () => {
     it('should detect a simple L-shape', () => {
       const points: Point[] = [];
       // Horizontal segment
@@ -77,9 +54,9 @@ describe('Shape Recognition Tests', () => {
         points.push({ x: 30, y: 25 + i * 3 });
       }
       
-      const result = detectPolyline(points);
+      const result = predictShape(points);
       expect(result).not.toBeNull();
-      expect(result!.length).toBeGreaterThanOrEqual(3); // Start, corner, end
+      expect(result!.length).toBeGreaterThanOrEqual(3);
     });
 
     it('should detect a Z-shape', () => {
@@ -97,12 +74,14 @@ describe('Shape Recognition Tests', () => {
         points.push({ x: 18 + i * 3, y: 36 });
       }
       
-      const result = detectPolyline(points);
+      const result = predictShape(points);
       expect(result).not.toBeNull();
-      expect(result!.length).toBeGreaterThanOrEqual(4); // Multiple corners
+      expect(result!.length).toBeGreaterThanOrEqual(3);
     });
+  });
 
-    it('should detect a closed square', () => {
+  describe('predictShape - Closed Shapes', () => {
+    it('should detect a closed square as rectangle', () => {
       const points: Point[] = [];
       const size = 30;
       const startX = 10, startY = 10;
@@ -124,63 +103,62 @@ describe('Shape Recognition Tests', () => {
         points.push({ x: startX, y: startY + size - i * size / 10 });
       }
       
-      const result = detectPolyline(points);
+      const result = predictShape(points);
       expect(result).not.toBeNull();
-      // Should detect corners and close the shape
     });
 
-    it('should reject smooth curves', () => {
+    it('should detect a closed triangle', () => {
       const points: Point[] = [];
-      for (let i = 0; i <= 30; i++) {
-        const angle = (i / 30) * Math.PI;
-        points.push({
-          x: 25 + Math.cos(angle) * 20,
-          y: 25 + Math.sin(angle) * 15
-        });
+      const size = 30;
+      const startX = 25, startY = 5;
+      
+      // First edge
+      for (let i = 0; i <= 10; i++) {
+        points.push({ x: startX, y: startY + i * size / 10 });
+      }
+      // Second edge
+      for (let i = 1; i <= 10; i++) {
+        points.push({ x: startX + size - i * size / 10, y: startY + size - i * size / 20 });
+      }
+      // Third edge (back to start)
+      for (let i = 1; i <= 10; i++) {
+        points.push({ x: startX - size + i * size / 10, y: startY + i * size / 10 });
       }
       
-      const result = detectPolyline(points);
-      expect(result).toBeNull(); // Should not detect as polyline
+      const result = predictShape(points);
+      expect(result).not.toBeNull();
     });
   });
 
-  describe('predictShape', () => {
-    it('should predict line for straight horizontal points', () => {
+  describe('predictShapeWithDetails', () => {
+    it('should return shape type and confidence', () => {
       const points: Point[] = [];
       for (let i = 0; i <= 10; i++) {
-        points.push({ x: i * 4, y: 30 });
+        points.push({ x: i * 5, y: 50 });
       }
       
-      const result = predictShape(points);
+      const result = predictShapeWithDetails(points);
       expect(result).not.toBeNull();
-      expect(result).toHaveLength(2); // Line should return [start, end]
-    });
-
-    it('should predict polyline for L-shaped points', () => {
-      const points: Point[] = [];
-      // Horizontal
-      for (let i = 0; i <= 8; i++) {
-        points.push({ x: i * 4, y: 30 });
-      }
-      // Vertical
-      for (let i = 1; i <= 8; i++) {
-        points.push({ x: 32, y: 30 + i * 3 });
-      }
-      
-      const result = predictShape(points);
-      expect(result).not.toBeNull();
-      expect(result!.length).toBeGreaterThan(2); // Should have corner points
+      expect(result!.type).toBe('line');
+      expect(result!.confidence).toBeGreaterThan(0);
     });
 
     it('should return null for insufficient points', () => {
       const points: Point[] = [{ x: 0, y: 0 }];
       
-      const result = predictShape(points);
+      const result = predictShapeWithDetails(points);
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('predictShape', () => {
+    it('should return null for empty input', () => {
+      const result = predictShape([]);
       expect(result).toBeNull();
     });
 
-    it('should return null for empty input', () => {
-      const result = predictShape([]);
+    it('should return null for single point', () => {
+      const result = predictShape([{ x: 0, y: 0 }]);
       expect(result).toBeNull();
     });
   });

@@ -3,6 +3,7 @@ import { useDrawingStore } from '../store';
 import type { Point, Stroke } from '../types';
 import { generateId, distance } from '../utils';
 import { simplifyStroke } from '../brush/strokeSimplifier';
+import { predictShape } from '../shapeRecognition';
 import './DrawingCanvas.css';
 
 interface CanvasProps {
@@ -273,6 +274,14 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     if (currentStrokePoints.length > 1) {
       const { simplifiedPoints, cornerPoints, cornerIndices, segments } = simplifyStroke(currentStrokePoints);
 
+      let displayPoints: Point[] | undefined;
+      if (store.predictEnabled) {
+        const predicted = predictShape(simplifiedPoints);
+        if (predicted) {
+          displayPoints = predicted;
+        }
+      }
+
       const stroke: Stroke = {
         id: generateId(),
         points: currentStrokePoints,
@@ -280,6 +289,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         cornerPoints,
         cornerIndices,
         segments,
+        displayPoints,
         color: store.currentColor,
         thickness: store.currentBrushSettings.size,
         timestamp: Date.now(),
