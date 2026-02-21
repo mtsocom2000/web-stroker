@@ -1,6 +1,7 @@
 import type { Point } from '../types';
 import { distance } from '../utils';
 import { computeTurnAngle } from './cornerDetection';
+import { fitLinesToSegments, checkPerpendicular, checkParallel } from './fitting';
 
 export type ShapeType = 
   | 'line' 
@@ -161,6 +162,32 @@ function classifyAngle(segments: Point[][], isClosed: boolean): ClassificationRe
 
 function classifyTriangle(segments: Point[][]): ClassificationResult {
   const corners = segments.map(s => s[s.length - 1]);
+  
+  if (corners.length !== 3) {
+    return { type: 'unknown', points: [], confidence: 0 };
+  }
+  
+  const p0 = segments[0][0];
+  const p1 = corners[0];
+  const p2 = corners[1];
+  
+  const perimeter = distance(p0, p1) + distance(p1, p2) + distance(p2, p0);
+  
+  if (perimeter < 30) {
+    return { type: 'unknown', points: [], confidence: 0 };
+  }
+  
+  const avgSideLength = perimeter / 3;
+  const side1 = distance(p0, p1);
+  const side2 = distance(p1, p2);
+  const side3 = distance(p2, p0);
+  
+  const sideVariation = Math.max(
+    Math.abs(side1 - avgSideLength),
+    Math.abs(side2 - avgSideLength),
+    Math.abs(side3 - avgSideLength)
+  ) / avgSideLength;
+  
   const points = [
     segments[0][0],
     corners[0],
@@ -168,27 +195,77 @@ function classifyTriangle(segments: Point[][]): ClassificationResult {
     corners[2],
     segments[0][0],
   ];
-
-  const angles = [];
-  for (let i = 0; i < 3; i++) {
-    const prev = corners[(i + 2) % 3];
-    const curr = corners[i];
-    const next = corners[(i + 1) % 3];
-    const angle = computeTurnAngle(prev, curr, next);
-    angles.push(angle);
+  
+  let confidence = 0.7;
+  
+  if (sideVariation < 0.3) {
+    confidence = 0.85;
+  } else if (sideVariation < 0.5) {
+    confidence = 0.75;
   }
-
-  const avgAngle = angles.reduce((a, b) => a + b, 0) / 3;
-  const expectedAngle = Math.PI / 3;
-  const deviation = Math.abs(avgAngle - expectedAngle);
-
-  const confidence = deviation < 0.3 ? 0.8 : 0.5;
-
+  
   return { type: 'triangle', points, confidence };
 }
 
 function classifyRectangle(segments: Point[][]): ClassificationResult {
   const corners = segments.map(s => s[s.length - 1]);
+  
+  if (corners.length !== 4) {
+    return classifyPolygon(segments);
+  }
+
+  const segmentPoints: Point[][] = [];
+  
+  for (let i = 0; i < 4; i++) {
+    const start = corners[i];
+    const end = corners[(i + 1) % 4];
+    segmentPoints.push([start, end]);
+  }
+  
+  const { lines } = fitLinesToSegments(
+    segments.flat(),
+    [0, 1, 2, 3].map(i => i * 10).filter((_, i) => i < segments.length)
+  );
+  
+  if (lines.length < 4) {
+    return classifyPolygon(segments);
+  }
+  
+  let perpendicularCount = 0;
+  let parallelCount = 0;
+  const sideLengths: number[] = [];
+  
+  for (let i = 0; i < 4; i++) {
+    const line1 = lines[i];
+    const line2 = lines[(i + 1) % 4];
+    
+    if (checkPerpendicular(line1, line2, 0.2)) {
+      perpendicularCount++;
+    }
+    
+    const line3 = lines[(i + 2) % 4];
+    if (checkParallel(line1, line3, 0.2)) {
+      parallelCount++;
+    }
+    
+    sideLengths.push(distance(corners[i], corners[(i + 1) % 4]));
+  }
+  
+  const avgLength = sideLengths.reduce((a, b) => a + b, 0) / 4;
+  const lengthVariations = sideLengths.map(l => Math.abs(l - avgLength) / avgLength);
+  const similarLengths = lengthVariations.filter(v => v < 0.25).length;
+  
+  if (perpendicularCount >= 3 && parallelCount >= 2 && similarLengths >= 2) {
+    const points = [
+      segments[0][0],
+      corners[0],
+      corners[1],
+      corners[2],
+      corners[3],
+      segments[0][0],
+    ];
+    return { type: 'rectangle', points, confidence: 0.85 };
+  }
   
   const angles = [];
   for (let i = 0; i < 4; i++) {

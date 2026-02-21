@@ -133,7 +133,10 @@ export function isClosedShape(points: Point[], threshold: number = 0.2): boolean
   const startToEnd = distance(points[0], points[points.length - 1]);
   const perimeter = computePerimeter(points);
 
-  return startToEnd < perimeter * threshold;
+  const absThreshold = Math.max(10, perimeter * 0.05);
+  const relThreshold = perimeter * threshold;
+  
+  return startToEnd < Math.min(absThreshold, relThreshold);
 }
 
 function computePerimeter(points: Point[]): number {
