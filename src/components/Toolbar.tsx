@@ -83,14 +83,22 @@ export const Toolbar: React.FC = () => {
       <div className="toolbar-group">
         <button
           className={`toolbar-btn ${store.mode === 'select' ? 'toolbar-btn-active' : ''}`}
-          onClick={() => store.setMode('select')}
+          onClick={() => {
+            store.setMode('select');
+            store.setDigitalMode('select');
+          }}
           title="Select mode (V)"
         >
           Select
         </button>
         <button
           className={`toolbar-btn ${store.mode === 'draw' ? 'toolbar-btn-active' : ''}`}
-          onClick={() => store.setMode('draw')}
+          onClick={() => {
+            store.setMode('draw');
+            if (store.toolCategory === 'digital') {
+              store.setDigitalMode('draw');
+            }
+          }}
           title="Draw mode (D)"
         >
           Draw

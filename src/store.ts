@@ -1,13 +1,55 @@
 import { create } from 'zustand';
-import type { Stroke, CanvasState } from './types';
+import type { Stroke, CanvasState, DigitalSegment, ToolCategory, ArtisticTool, DigitalTool, Point } from './types';
 import type { BrushType, BrushSettings } from './brush/presets';
+import type { FillRegion } from './fillRegion';
 
 type DrawingMode = 'select' | 'draw';
 
+type DigitalMode = 'select' | 'draw';
+type CircleCreationMode = 'centerRadius' | 'threePoint';
+
+interface DigitalElement {
+  strokeId: string;
+  segmentId: string;
+  pointIndex: number;
+  point: Point;
+  type: 'endpoint' | 'control' | 'cross';
+}
+
 interface DrawingState {
-  // Mode
+  // Tool Category
+  toolCategory: ToolCategory;
+  setToolCategory: (category: ToolCategory) => void;
+
+  // Artistic Tool
+  artisticTool: ArtisticTool;
+  setArtisticTool: (tool: ArtisticTool) => void;
+
+  // Digital Tool
+  digitalTool: DigitalTool;
+  setDigitalTool: (tool: DigitalTool) => void;
+  
+  // Digital Mode (draw vs select for digital elements)
+  digitalMode: DigitalMode;
+  setDigitalMode: (mode: DigitalMode) => void;
+  
+  // Circle creation mode
+  circleCreationMode: CircleCreationMode;
+  setCircleCreationMode: (mode: CircleCreationMode) => void;
+
+  // Mode (for backward compatibility - select/draw)
   mode: DrawingMode;
   setMode: (mode: DrawingMode) => void;
+
+  // Digital Selection
+  selectedDigitalStrokeIds: string[];
+  setSelectedDigitalStrokeIds: (ids: string[]) => void;
+  selectedDigitalElement: DigitalElement | null;
+  setSelectedDigitalElement: (element: DigitalElement | null) => void;
+  hoveredDigitalElement: DigitalElement | null;
+  setHoveredDigitalElement: (element: DigitalElement | null) => void;
+  hoveredDigitalStrokeId: string | null;
+  setHoveredDigitalStrokeId: (id: string | null) => void;
 
   // Strokes
   strokes: Stroke[];
@@ -16,6 +58,15 @@ interface DrawingState {
   updateStroke: (id: string, stroke: Stroke) => void;
   updateStrokes: (strokes: { id: string; stroke: Stroke }[]) => void;
   clearStrokes: () => void;
+  
+  // Digital segments (helper - get all digital segments from strokes)
+  getDigitalSegments: () => DigitalSegment[];
+
+  // Fill Regions
+  fillRegions: FillRegion[];
+  setFillRegions: (regions: FillRegion[]) => void;
+  selectedFillRegionId: string | null;
+  setSelectedFillRegionId: (id: string | null) => void;
 
   // Selection
   selectedStrokeIds: string[];
@@ -87,8 +138,42 @@ export const useDrawingStore = create<DrawingState>((set) => {
   };
 
   return {
+    // Tool Category
+    toolCategory: 'artistic',
+    setToolCategory: (category) => set({ toolCategory: category }),
+
+    // Artistic Tool
+    artisticTool: 'pencil',
+    setArtisticTool: (tool) => set({ artisticTool: tool }),
+
+    // Digital Tool
+    digitalTool: 'line',
+    setDigitalTool: (tool) => set({ digitalTool: tool }),
+    
+    // Digital Mode
+    digitalMode: 'draw',
+    setDigitalMode: (mode) => set({ digitalMode: mode }),
+    
+    // Circle Creation Mode
+    circleCreationMode: 'centerRadius',
+    setCircleCreationMode: (mode) => set({ circleCreationMode: mode }),
+
+    // Mode (backward compatibility)
     mode: 'select',
+    
+    // Digital Selection
+    selectedDigitalStrokeIds: [],
+    setSelectedDigitalStrokeIds: (ids) => set({ selectedDigitalStrokeIds: ids }),
+    selectedDigitalElement: null,
+    setSelectedDigitalElement: (element) => set({ selectedDigitalElement: element }),
+    hoveredDigitalElement: null,
+    setHoveredDigitalElement: (element) => set({ hoveredDigitalElement: element }),
+    hoveredDigitalStrokeId: null,
+    setHoveredDigitalStrokeId: (id) => set({ hoveredDigitalStrokeId: id }),
+
     strokes: [],
+    fillRegions: [],
+    selectedFillRegionId: null,
     canvasWidth: 100,
     canvasHeight: 100,
     zoom: 1,
@@ -190,6 +275,7 @@ export const useDrawingStore = create<DrawingState>((set) => {
         return {
           strokes: [],
           selectedStrokeIds: [],
+          fillRegions: [],
           history: newHistory,
           historyIndex: newHistory.length - 1,
         };
@@ -218,6 +304,10 @@ export const useDrawingStore = create<DrawingState>((set) => {
       })),
 
     clearSelection: () => set({ selectedStrokeIds: [] }),
+
+    // Fill Region operations
+    setFillRegions: (regions) => set({ fillRegions: regions }),
+    setSelectedFillRegionId: (id) => set({ selectedFillRegionId: id }),
 
     // Update multiple strokes at once (for move operations)
     updateStrokes: (updates) =>
@@ -332,5 +422,11 @@ export const useDrawingStore = create<DrawingState>((set) => {
         }
         return state;
       }),
+
+    // Helper to get all digital segments from strokes
+    getDigitalSegments: () => {
+      const segments: DigitalSegment[] = [];
+      return segments;
+    },
   };
 });

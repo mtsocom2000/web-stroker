@@ -128,3 +128,102 @@
   padding: 0;
   cursor: pointer;
 }
+
+.drawtool-category-tabs {
+  display: flex;
+  gap: 4px;
+  background: #f0f0f0;
+  border-radius: 6px;
+  padding: 3px;
+}
+
+.drawtool-tab {
+  flex: 1;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: #666;
+  transition: all 0.15s ease;
+}
+
+.drawtool-tab:hover {
+  color: #333;
+}
+
+.drawtool-tab.active {
+  background: #fff;
+  color: #2196f3;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.drawtool-tool-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.drawtool-tool-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #f9f9f9;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-width: 60px;
+}
+
+.drawtool-tool-btn:hover {
+  background: #f0f0f0;
+  border-color: #ccc;
+}
+
+.drawtool-tool-btn.active {
+  background: #e3f2fd;
+  border-color: #2196f3;
+  box-shadow: 0 0 0 1px #2196f3;
+}
+
+.drawtool-tool-icon {
+  font-size: 18px;
+  margin-bottom: 2px;
+}
+
+.drawtool-tool-label {
+  font-size: 10px;
+  color: #666;
+}
+
+.drawtool-mode-selector {
+  display: flex;
+  gap: 4px;
+}
+
+.drawtool-mode-btn {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #f9f9f9;
+  cursor: pointer;
+  font-size: 11px;
+  color: #666;
+  transition: all 0.15s ease;
+}
+
+.drawtool-mode-btn:hover {
+  background: #f0f0f0;
+}
+
+.drawtool-mode-btn.active {
+  background: #e3f2fd;
+  border-color: #2196f3;
+  color: #2196f3;
+}

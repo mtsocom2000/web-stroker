@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useDrawingStore } from '../store';
-import type { BrushType } from '../brush/presets';
+import type { ArtisticTool, DigitalTool } from '../types';
 import './DrawToolPanel.css';
 
 const STORAGE_KEY = 'webstroker-drawtool-panel-position';
@@ -10,21 +10,37 @@ interface Position {
   y: number;
 }
 
-const BRUSH_ICONS: Record<BrushType, string> = {
+const ARTISTIC_ICONS: Record<ArtisticTool, string> = {
   pencil: '✏️',
   pen: '🖊️',
   brush: '🖌️',
   ballpen: '🖋️',
+  eraser: '🧹',
 };
 
-const BRUSH_LABELS: Record<BrushType, string> = {
+const ARTISTIC_LABELS: Record<ArtisticTool, string> = {
   pencil: 'Pencil',
   pen: 'Pen',
   brush: 'Brush',
   ballpen: 'Ball Pen',
+  eraser: 'Eraser',
 };
 
-const BRUSH_TYPES: BrushType[] = ['pencil', 'pen', 'brush', 'ballpen'];
+const ARTISTIC_TOOLS: ArtisticTool[] = ['pencil', 'pen', 'brush', 'ballpen', 'eraser'];
+
+const DIGITAL_ICONS: Record<DigitalTool, string> = {
+  line: '📏',
+  circle: '⭕',
+  curve: '〰️',
+};
+
+const DIGITAL_LABELS: Record<DigitalTool, string> = {
+  line: 'Line',
+  circle: 'Circle',
+  curve: 'Curve',
+};
+
+const DIGITAL_TOOLS: DigitalTool[] = ['line', 'circle', 'curve'];
 
 export const DrawToolPanel: React.FC = () => {
   const store = useDrawingStore();
@@ -79,6 +95,9 @@ export const DrawToolPanel: React.FC = () => {
     }
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
+  const isArtisticActive = store.toolCategory === 'artistic';
+  const isDigitalActive = store.toolCategory === 'digital';
+
   return (
     <div
       ref={panelRef}
@@ -94,62 +113,151 @@ export const DrawToolPanel: React.FC = () => {
       </div>
       <div className="drawtool-panel-body">
         <div className="drawtool-panel-section">
-          <div className="drawtool-brush-selector">
-            {BRUSH_TYPES.map((brushType) => (
-              <button
-                key={brushType}
-                className={`drawtool-brush-btn ${store.currentBrushType === brushType ? 'active' : ''}`}
-                onClick={() => store.setBrushType(brushType)}
-                title={BRUSH_LABELS[brushType]}
-              >
-                <span className="drawtool-brush-icon">{BRUSH_ICONS[brushType]}</span>
-                <span className="drawtool-brush-label">{BRUSH_LABELS[brushType]}</span>
-              </button>
-            ))}
+          <div className="drawtool-category-tabs">
+            <button
+              className={`drawtool-tab ${isArtisticActive ? 'active' : ''}`}
+              onClick={() => store.setToolCategory('artistic')}
+            >
+              Artistic
+            </button>
+            <button
+              className={`drawtool-tab ${isDigitalActive ? 'active' : ''}`}
+              onClick={() => store.setToolCategory('digital')}
+            >
+              Digital
+            </button>
           </div>
         </div>
 
-        <div className="drawtool-panel-section">
-          <label className="drawtool-slider-label">
-            Size: {store.currentBrushSettings.size}
-            <input
-              type="range"
-              min="1"
-              max="30"
-              value={store.currentBrushSettings.size}
-              onChange={(e) => store.setBrushSize(parseInt(e.target.value))}
-              className="drawtool-slider"
-            />
-          </label>
-        </div>
+        {isArtisticActive && (
+          <>
+            <div className="drawtool-panel-section">
+              <div className="drawtool-tool-selector">
+                {ARTISTIC_TOOLS.map((tool) => (
+                  <button
+                    key={tool}
+                    className={`drawtool-tool-btn ${store.artisticTool === tool ? 'active' : ''}`}
+                    onClick={() => store.setArtisticTool(tool)}
+                    title={ARTISTIC_LABELS[tool]}
+                  >
+                    <span className="drawtool-tool-icon">{ARTISTIC_ICONS[tool]}</span>
+                    <span className="drawtool-tool-label">{ARTISTIC_LABELS[tool]}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
 
-        <div className="drawtool-panel-section">
-          <label className="drawtool-slider-label">
-            Opacity: {(store.currentBrushSettings.opacity * 100).toFixed(0)}%
-            <input
-              type="range"
-              min="10"
-              max="100"
-              value={store.currentBrushSettings.opacity * 100}
-              onChange={(e) => store.setBrushOpacity(parseInt(e.target.value) / 100)}
-              className="drawtool-slider"
-            />
-          </label>
-        </div>
+            <div className="drawtool-panel-section">
+              <label className="drawtool-slider-label">
+                Size: {store.currentBrushSettings.size}
+                <input
+                  type="range"
+                  min="1"
+                  max="30"
+                  value={store.currentBrushSettings.size}
+                  onChange={(e) => store.setBrushSize(parseInt(e.target.value))}
+                  className="drawtool-slider"
+                />
+              </label>
+            </div>
 
-        <div className="drawtool-panel-section">
-          <label className="drawtool-slider-label">
-            Hardness: {(store.currentBrushSettings.hardness * 100).toFixed(0)}%
-            <input
-              type="range"
-              min="0"
-              max="100"
-              value={store.currentBrushSettings.hardness * 100}
-              onChange={(e) => store.setBrushHardness(parseInt(e.target.value) / 100)}
-              className="drawtool-slider"
-            />
-          </label>
-        </div>
+            <div className="drawtool-panel-section">
+              <label className="drawtool-slider-label">
+                Opacity: {(store.currentBrushSettings.opacity * 100).toFixed(0)}%
+                <input
+                  type="range"
+                  min="10"
+                  max="100"
+                  value={store.currentBrushSettings.opacity * 100}
+                  onChange={(e) => store.setBrushOpacity(parseInt(e.target.value) / 100)}
+                  className="drawtool-slider"
+                />
+              </label>
+            </div>
+
+            <div className="drawtool-panel-section">
+              <label className="drawtool-slider-label">
+                Hardness: {(store.currentBrushSettings.hardness * 100).toFixed(0)}%
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={store.currentBrushSettings.hardness * 100}
+                  onChange={(e) => store.setBrushHardness(parseInt(e.target.value) / 100)}
+                  className="drawtool-slider"
+                />
+              </label>
+            </div>
+          </>
+        )}
+
+        {isDigitalActive && (
+          <>
+            <div className="drawtool-panel-section">
+              <div className="drawtool-tool-selector">
+                {DIGITAL_TOOLS.map((tool) => (
+                  <button
+                    key={tool}
+                    className={`drawtool-tool-btn ${store.digitalTool === tool ? 'active' : ''}`}
+                    onClick={() => store.setDigitalTool(tool)}
+                    title={DIGITAL_LABELS[tool]}
+                  >
+                    <span className="drawtool-tool-icon">{DIGITAL_ICONS[tool]}</span>
+                    <span className="drawtool-tool-label">{DIGITAL_LABELS[tool]}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {store.digitalTool === 'circle' && (
+              <div className="drawtool-panel-section">
+                <div className="drawtool-mode-selector">
+                  <button
+                    className={`drawtool-mode-btn ${store.circleCreationMode === 'centerRadius' ? 'active' : ''}`}
+                    onClick={() => store.setCircleCreationMode('centerRadius')}
+                  >
+                    Center+Radius
+                  </button>
+                  <button
+                    className={`drawtool-mode-btn ${store.circleCreationMode === 'threePoint' ? 'active' : ''}`}
+                    onClick={() => store.setCircleCreationMode('threePoint')}
+                  >
+                    3-Point
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="drawtool-panel-section">
+              <div className="drawtool-color-label">
+                <span>Color:</span>
+                <input
+                  type="color"
+                  value={store.currentColor}
+                  onChange={(e) => store.setColor(e.target.value)}
+                  className="drawtool-color-picker"
+                />
+              </div>
+            </div>
+
+            <div className="drawtool-panel-section">
+              <div className="drawtool-mode-selector">
+                <button
+                  className={`drawtool-mode-btn ${store.digitalMode === 'draw' ? 'active' : ''}`}
+                  onClick={() => store.setDigitalMode('draw')}
+                >
+                  Draw
+                </button>
+                <button
+                  className={`drawtool-mode-btn ${store.digitalMode === 'select' ? 'active' : ''}`}
+                  onClick={() => store.setDigitalMode('select')}
+                >
+                  Select
+                </button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
