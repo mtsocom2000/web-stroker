@@ -61,6 +61,12 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     segments: Array<{ strokeId: string; segmentIndex: number }>;
   } | null>(null);
 
+  // Cache for intersection points to improve performance
+  const intersectionsCacheRef = useRef<Array<{
+    point: Point;
+    segments: Array<{ strokeId: string; segmentIndex: number }>;
+  }> | null>(null);
+
   const strokesRef = useRef<Stroke[]>([]);
   const store = useDrawingStore();
   const panRef = useRef({ x: store.panX, y: store.panY, zoom: store.zoom });
@@ -73,6 +79,9 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
   useEffect(() => {
     strokesRef.current = store.strokes;
+    
+    // Invalidate intersections cache when strokes change
+    intersectionsCacheRef.current = null;
     
     if (closedAreaManagerRef.current) {
       // Only pass digital strokes to closed area manager
@@ -288,6 +297,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
           const isControl = i === 1 || i === 2;
           drawControlPointIndicator(ctx, screen, isControl ? 4 : 6, '#2196f3');
         });
+        
         // Draw guide lines between control points
         if (curvePoints.length >= 2) {
           for (let i = 0; i < curvePoints.length - 1; i++) {
@@ -302,6 +312,15 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
             ctx.stroke();
             ctx.setLineDash([]);
           }
+        }
+        
+        // Preview bezier curve when we have 3 points
+        if (curvePoints.length === 3 && lastMousePosRef.current) {
+          const p0 = curvePoints[0];
+          const p1 = curvePoints[1];
+          const p2 = curvePoints[2];
+          const p3 = lastMousePosRef.current;
+          drawDigitalBezier(ctx, [p0, p1, p2, p3], store.currentColor, worldToScreen, false, false);
         }
       }
     }
@@ -419,6 +438,11 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     point: Point;
     segments: Array<{ strokeId: string; segmentIndex: number }>;
   }> {
+    // Return cached intersections if available
+    if (intersectionsCacheRef.current) {
+      return intersectionsCacheRef.current;
+    }
+
     const intersections: Array<{
       point: Point;
       segments: Array<{ strokeId: string; segmentIndex: number }>;
@@ -484,6 +508,8 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       }
     }
 
+    // Cache the result
+    intersectionsCacheRef.current = intersections;
     return intersections;
   }
 
@@ -801,40 +827,78 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       }
       
       if (digitalTool === 'curve') {
-        // Bezier curve: click for p0, p1(control), p2(control), p3
-        setCurvePoints(prev => [...prev, world]);
-        
-        if (curvePoints.length >= 3) {
-          // We have 3 points: p0, p1(control), p2(control) - now we get p3
-          const p0 = curvePoints[0];
-          const p1 = curvePoints[1];
-          const p2 = curvePoints[2];
+        // Bezier curve: click for p0, p1(control), p2(control), then move to p3
+        // Use functional update to get the latest state
+        setCurvePoints(prev => {
+          const newPoints = [...prev, world];
           
-          // Check if closing (clicking near start)
-          const clickThreshold = 10 / panRef.current.zoom;
-          if (distance(world, p0) <= clickThreshold) {
-            // Close the bezier curve
+          // If we have 3 points + current mouse position = 4 points for bezier
+          if (newPoints.length >= 4) {
+            const p0 = newPoints[0];
+            const p1 = newPoints[1];
+            const p2 = newPoints[2];
+            const p3 = newPoints[3]; // Current mouse position
+            
+            // Create the bezier curve stroke
             const segments: DigitalSegment[] = [{
               id: generateId(),
               type: 'bezier',
-              points: [p0, p1, p2, p0],
+              points: [p0, p1, p2, p3],
               color: store.currentColor,
             }];
             
             const stroke: Stroke = {
               id: generateId(),
-              points: [p0, p1, p2, p0],
-              smoothedPoints: [p0, p1, p2, p0],
+              points: [p0, p1, p2, p3],
+              smoothedPoints: [p0, p1, p2, p3],
               color: store.currentColor,
               thickness: 1,
               timestamp: Date.now(),
               strokeType: 'digital',
               digitalSegments: segments,
-              isClosed: true,
+              isClosed: false,
             };
             
             store.addStroke(stroke);
-            setCurvePoints([]);
+            return []; // Clear points
+          }
+          
+          return newPoints;
+        });
+        
+        // Check if clicking near start point to close (using current state)
+        if (curvePoints.length >= 3) {
+          const p0 = curvePoints[0];
+          
+          const clickThreshold = 10 / panRef.current.zoom;
+          if (distance(world, p0) <= clickThreshold) {
+            // Close the bezier curve - need at least 3 points + current = 4
+            if (curvePoints.length >= 3) {
+              const p1 = curvePoints[1];
+              const p2 = curvePoints[2];
+              
+              const segments: DigitalSegment[] = [{
+                id: generateId(),
+                type: 'bezier',
+                points: [p0, p1, p2, p0],
+                color: store.currentColor,
+              }];
+              
+              const stroke: Stroke = {
+                id: generateId(),
+                points: [p0, p1, p2, p0],
+                smoothedPoints: [p0, p1, p2, p0],
+                color: store.currentColor,
+                thickness: 1,
+                timestamp: Date.now(),
+                strokeType: 'digital',
+                digitalSegments: segments,
+                isClosed: true,
+              };
+              
+              store.addStroke(stroke);
+              setCurvePoints([]);
+            }
             return;
           }
         }
@@ -951,6 +1015,9 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
             }));
           closedAreaManagerRef.current.setStrokes(updatedStrokes);
         }
+
+        // Invalidate intersections cache after split
+        intersectionsCacheRef.current = null;
         
         if (e.ctrlKey || e.metaKey) {
           // Toggle intersection selection
@@ -1113,6 +1180,9 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
             }));
           closedAreaManagerRef.current.setStrokes(updatedStrokes);
         }
+
+        // Invalidate intersections cache after dragging
+        intersectionsCacheRef.current = null;
         
         // Update the stored intersection point
         setSelectedIntersection(prev => prev ? {
@@ -1220,6 +1290,9 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
             }));
           closedAreaManagerRef.current.setStrokes(updatedStrokes);
         }
+
+        // Invalidate intersections cache after dragging
+        intersectionsCacheRef.current = null;
 
         setDigitalDragStart(world);
         return;
@@ -1390,10 +1463,95 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
-      onDoubleClick={(e) => {
-        // Double-click to complete digital line without closing
+      onContextMenu={(e) => {
+        // Right-click to close line/curve segments
+        e.preventDefault();
+        
+        // Handle line mode close
         if (store.toolCategory === 'digital' && store.digitalMode === 'draw' && store.digitalTool === 'line' && digitalLinePoints.length >= 2) {
-          e.preventDefault();
+          // Close the polyline by connecting last point to first point
+          const closingSegmentPoints = [digitalLinePoints[digitalLinePoints.length - 1], digitalLinePoints[0]];
+          const closingSegment: Stroke = {
+            id: generateId(),
+            points: closingSegmentPoints,
+            smoothedPoints: closingSegmentPoints,
+            color: store.currentColor,
+            thickness: 1,
+            timestamp: Date.now(),
+            strokeType: 'digital',
+            digitalSegments: [{
+              id: generateId(),
+              type: 'line',
+              points: closingSegmentPoints,
+              color: store.currentColor,
+            }],
+            isClosed: true,
+          };
+          store.addStroke(closingSegment);
+          
+          // Also create strokes for each existing segment
+          for (let i = 0; i < digitalLinePoints.length - 1; i++) {
+            const segmentPoints = [digitalLinePoints[i], digitalLinePoints[i + 1]];
+            const segment: Stroke = {
+              id: generateId(),
+              points: segmentPoints,
+              smoothedPoints: segmentPoints,
+              color: store.currentColor,
+              thickness: 1,
+              timestamp: Date.now(),
+              strokeType: 'digital',
+              digitalSegments: [{
+                id: generateId(),
+                type: 'line',
+                points: segmentPoints,
+                color: store.currentColor,
+              }],
+              isClosed: false,
+            };
+            store.addStroke(segment);
+          }
+          
+          setDigitalLinePoints([]);
+          setDigitalLinePreviewEnd(null);
+          return;
+        }
+        
+        // Handle curve mode close
+        if (store.toolCategory === 'digital' && store.digitalMode === 'draw' && store.digitalTool === 'curve' && curvePoints.length >= 3) {
+          const p0 = curvePoints[0];
+          const p1 = curvePoints[1];
+          const p2 = curvePoints[2];
+          
+          const segments: DigitalSegment[] = [{
+            id: generateId(),
+            type: 'bezier',
+            points: [p0, p1, p2, p0],
+            color: store.currentColor,
+          }];
+          
+          const stroke: Stroke = {
+            id: generateId(),
+            points: [p0, p1, p2, p0],
+            smoothedPoints: [p0, p1, p2, p0],
+            color: store.currentColor,
+            thickness: 1,
+            timestamp: Date.now(),
+            strokeType: 'digital',
+            digitalSegments: segments,
+            isClosed: true,
+          };
+          
+          store.addStroke(stroke);
+          setCurvePoints([]);
+          return;
+        }
+      }}
+      onDoubleClick={(e) => {
+        // Double-click to complete digital line or curve without closing
+        e.preventDefault();
+        
+        // Handle line mode
+        if (store.toolCategory === 'digital' && store.digitalMode === 'draw' && store.digitalTool === 'line' && digitalLinePoints.length >= 2) {
           // Create separate strokes for each segment
           for (let i = 0; i < digitalLinePoints.length - 1; i++) {
             const segmentPoints = [digitalLinePoints[i], digitalLinePoints[i + 1]];
@@ -1418,6 +1576,38 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
           
           setDigitalLinePoints([]);
           setDigitalLinePreviewEnd(null);
+          return;
+        }
+        
+        // Handle curve mode - need at least 3 points, use last mouse position as end point
+        if (store.toolCategory === 'digital' && store.digitalMode === 'draw' && store.digitalTool === 'curve' && curvePoints.length >= 3 && lastMousePosRef.current) {
+          const p0 = curvePoints[0];
+          const p1 = curvePoints[1];
+          const p2 = curvePoints[2];
+          const p3 = lastMousePosRef.current;
+          
+          const segments: DigitalSegment[] = [{
+            id: generateId(),
+            type: 'bezier',
+            points: [p0, p1, p2, p3],
+            color: store.currentColor,
+          }];
+          
+          const stroke: Stroke = {
+            id: generateId(),
+            points: [p0, p1, p2, p3],
+            smoothedPoints: [p0, p1, p2, p3],
+            color: store.currentColor,
+            thickness: 1,
+            timestamp: Date.now(),
+            strokeType: 'digital',
+            digitalSegments: segments,
+            isClosed: false,
+          };
+          
+          store.addStroke(stroke);
+          setCurvePoints([]);
+          return;
         }
       }}
     >
