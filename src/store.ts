@@ -1,7 +1,14 @@
 import { create } from 'zustand';
-import type { Stroke, CanvasState, DigitalSegment, ToolCategory, ArtisticTool, DigitalTool, Point } from './types';
+import type { Stroke, CanvasState, DigitalSegment, ToolCategory, ArtisticTool, DigitalTool, Point, LengthUnit, AngleUnit } from './types';
 import type { BrushType, BrushSettings } from './brush/presets';
 import type { FillRegion } from './fillRegion';
+
+const DEFAULT_PIXELS_PER_UNIT: Record<LengthUnit, number> = {
+  mm: 3.78,
+  cm: 37.8,
+  inch: 96,
+  px: 1,
+};
 
 type DrawingMode = 'select' | 'draw';
 
@@ -20,6 +27,14 @@ interface DrawingState {
   // Tool Category
   toolCategory: ToolCategory;
   setToolCategory: (category: ToolCategory) => void;
+
+  // Unit System
+  unit: LengthUnit;
+  angleUnit: AngleUnit;
+  pixelsPerUnit: number;
+  setUnit: (unit: LengthUnit) => void;
+  setAngleUnit: (unit: AngleUnit) => void;
+  setPixelsPerUnit: (pixels: number) => void;
 
   // Artistic Tool
   artisticTool: ArtisticTool;
@@ -54,8 +69,9 @@ interface DrawingState {
   // Strokes
   strokes: Stroke[];
   addStroke: (stroke: Stroke) => void;
+  addStrokesBatch: (strokes: Stroke[]) => void;
   removeStroke: (id: string) => void;
-  updateStroke: (id: string, stroke: Stroke) => void;
+  updateStroke: (id: string, stroke: Stroke, skipHistory?: boolean) => void;
   updateStrokes: (strokes: { id: string; stroke: Stroke }[]) => void;
   clearStrokes: () => void;
   
@@ -141,6 +157,14 @@ export const useDrawingStore = create<DrawingState>((set) => {
     // Tool Category
     toolCategory: 'artistic',
     setToolCategory: (category) => set({ toolCategory: category }),
+
+    // Unit System
+    unit: 'mm',
+    angleUnit: 'degree',
+    pixelsPerUnit: DEFAULT_PIXELS_PER_UNIT.mm,
+    setUnit: (unit) => set({ unit, pixelsPerUnit: DEFAULT_PIXELS_PER_UNIT[unit] }),
+    setAngleUnit: (angleUnit) => set({ angleUnit }),
+    setPixelsPerUnit: (pixelsPerUnit) => set({ pixelsPerUnit }),
 
     // Artistic Tool
     artisticTool: 'pencil',
@@ -238,9 +262,16 @@ export const useDrawingStore = create<DrawingState>((set) => {
         };
       }),
 
-    updateStroke: (id, stroke) =>
+    updateStroke: (id, stroke, skipHistory: boolean = false) =>
       set((state) => {
         const newStrokes = state.strokes.map((s) => (s.id === id ? stroke : s));
+        
+        if (skipHistory) {
+          return {
+            strokes: newStrokes,
+          };
+        }
+        
         const newHistory = state.history.slice(0, state.historyIndex + 1);
         newHistory.push({
           strokes: newStrokes,
@@ -276,6 +307,31 @@ export const useDrawingStore = create<DrawingState>((set) => {
           strokes: [],
           selectedStrokeIds: [],
           fillRegions: [],
+          history: newHistory,
+          historyIndex: newHistory.length - 1,
+        };
+      }),
+
+    // Batch stroke operations
+    addStrokesBatch: (strokes: Stroke[]) =>
+      set((state) => {
+        if (strokes.length === 0) return state;
+        
+        const newStrokes = [...state.strokes, ...strokes];
+        const newHistory = state.history.slice(0, state.historyIndex + 1);
+        newHistory.push({
+          strokes: newStrokes,
+          canvasWidth: state.canvasWidth,
+          canvasHeight: state.canvasHeight,
+          zoom: state.zoom,
+          panX: state.panX,
+          panY: state.panY,
+          predictEnabled: state.predictEnabled,
+          smoothEnabled: state.smoothEnabled,
+        });
+        return {
+          strokes: newStrokes,
+          selectedStrokeIds: [],
           history: newHistory,
           historyIndex: newHistory.length - 1,
         };

@@ -3,6 +3,9 @@ export type ArtisticTool = 'pencil' | 'pen' | 'brush' | 'ballpen' | 'eraser';
 export type DigitalTool = 'line' | 'circle' | 'curve';
 export type StrokeType = 'artistic' | 'digital';
 
+export type LengthUnit = 'mm' | 'cm' | 'inch' | 'px';
+export type AngleUnit = 'degree' | 'radian';
+
 export interface Point {
   x: number;
   y: number;

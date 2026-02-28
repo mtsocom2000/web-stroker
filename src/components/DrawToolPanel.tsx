@@ -1,7 +1,14 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useDrawingStore } from '../store';
-import type { ArtisticTool, DigitalTool } from '../types';
+import type { ArtisticTool, DigitalTool, LengthUnit } from '../types';
 import './DrawToolPanel.css';
+
+const UNIT_OPTIONS: { value: LengthUnit; label: string }[] = [
+  { value: 'mm', label: 'mm' },
+  { value: 'cm', label: 'cm' },
+  { value: 'inch', label: 'inch' },
+  { value: 'px', label: 'px' },
+];
 
 const STORAGE_KEY = 'webstroker-drawtool-panel-position';
 
@@ -237,6 +244,23 @@ export const DrawToolPanel: React.FC = () => {
                   onChange={(e) => store.setColor(e.target.value)}
                   className="drawtool-color-picker"
                 />
+              </div>
+            </div>
+
+            <div className="drawtool-panel-section">
+              <div className="drawtool-color-label">
+                <span>Unit:</span>
+                <select
+                  value={store.unit}
+                  onChange={(e) => store.setUnit(e.target.value as LengthUnit)}
+                  className="drawtool-unit-select"
+                >
+                  {UNIT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 

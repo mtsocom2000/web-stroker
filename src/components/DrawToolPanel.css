@@ -129,6 +129,25 @@
   cursor: pointer;
 }
 
+.drawtool-unit-select {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #f9f9f9;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.drawtool-unit-select:hover {
+  background: #f0f0f0;
+}
+
+.drawtool-unit-select:focus {
+  outline: none;
+  border-color: #2196f3;
+}
+
 .drawtool-category-tabs {
   display: flex;
   gap: 4px;

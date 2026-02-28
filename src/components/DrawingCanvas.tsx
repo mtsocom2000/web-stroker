@@ -5,6 +5,8 @@ import { generateId, distance } from '../utils';
 import { simplifyStroke } from '../brush/strokeSimplifier';
 import { predictShape } from '../shapeRecognition';
 import { ClosedAreaManager } from '../fillRegion';
+import { IntersectionManager } from '../intersection/IntersectionManager';
+import { formatLength, formatAngle, getAcuteAngle, distance as calcDistance, angleBetween } from '../measurements';
 import './DrawingCanvas.css';
 
 interface CanvasProps {
@@ -61,11 +63,14 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     segments: Array<{ strokeId: string; segmentIndex: number }>;
   } | null>(null);
 
-  // Cache for intersection points to improve performance
-  const intersectionsCacheRef = useRef<Array<{
-    point: Point;
-    segments: Array<{ strokeId: string; segmentIndex: number }>;
-  }> | null>(null);
+  // Track modified stroke IDs during drag for persistence on dragEnd
+  const modifiedStrokeIdsRef = useRef<Set<string>>(new Set());
+
+  // Track drag state to skip expensive operations during drag
+  const isDraggingRef = useRef(false);
+
+  // Intersection manager for efficient incremental updates
+  const intersectionManagerRef = useRef<IntersectionManager | null>(null);
 
   const strokesRef = useRef<Stroke[]>([]);
   const store = useDrawingStore();
@@ -75,16 +80,33 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
   useEffect(() => {
     closedAreaManagerRef.current = new ClosedAreaManager();
+    intersectionManagerRef.current = new IntersectionManager();
+    
+    if (intersectionManagerRef.current) {
+      intersectionManagerRef.current.setSegmentPointsGetter((id: string) => {
+        const [strokeId, segmentIndex] = id.split(':');
+        const stroke = strokesRef.current.find(s => s.id === strokeId);
+        if (!stroke || !stroke.digitalSegments) return null;
+        const seg = stroke.digitalSegments[parseInt(segmentIndex, 10)];
+        if (!seg || seg.points.length < 2) return null;
+        return [seg.points[0], seg.points[seg.points.length - 1]];
+      });
+    }
   }, []);
 
   useEffect(() => {
     strokesRef.current = store.strokes;
     
-    // Invalidate intersections cache when strokes change
-    intersectionsCacheRef.current = null;
+    // Rebuild spatial index for intersection calculation
+    if (intersectionManagerRef.current) {
+      intersectionManagerRef.current.buildFromStrokes(store.strokes);
+    }
     
-    if (closedAreaManagerRef.current) {
-      // Only pass digital strokes to closed area manager
+    // Only rebuild closed areas in select mode - skip during drawing for performance
+    const isInSelectMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') || 
+                           (store.toolCategory === 'artistic' && store.mode === 'select');
+    
+    if (closedAreaManagerRef.current && isInSelectMode) {
       const digitalStrokeData = store.strokes
         .filter(s => s.strokeType === 'digital')
         .map(s => ({
@@ -96,7 +118,39 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         }));
       closedAreaManagerRef.current.setStrokes(digitalStrokeData);
     }
-  }, [store.strokes]);
+  }, [store.strokes, store.toolCategory, store.digitalMode, store.mode]);
+
+  // Rebuild closed areas when switching to select mode (with debounce)
+  useEffect(() => {
+    const isInSelectMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') || 
+                           (store.toolCategory === 'artistic' && store.mode === 'select');
+    
+    if (isInSelectMode && closedAreaManagerRef.current) {
+      const digitalStrokeData = store.strokes
+        .filter(s => s.strokeType === 'digital')
+        .map(s => ({
+          id: s.id,
+          points: s.displayPoints ?? s.smoothedPoints ?? s.points,
+          displayPoints: s.displayPoints,
+          digitalSegments: s.digitalSegments,
+          isClosed: s.isClosed,
+        }));
+      
+      // Skip rebuild during drag to avoid freeze
+      if (isDraggingRef.current) {
+        return;
+      }
+      
+      // Use setTimeout for longer debounce to avoid blocking UI
+      const timeoutId = setTimeout(() => {
+        if (!isDraggingRef.current && closedAreaManagerRef.current) {
+          closedAreaManagerRef.current.setStrokes(digitalStrokeData);
+        }
+      }, 100);
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [store.toolCategory, store.digitalMode, store.mode]);
 
   useEffect(() => {
     panRef.current = { x: store.panX, y: store.panY, zoom: store.zoom };
@@ -145,7 +199,8 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     ctx.fillStyle = '#f8f9fa';
     ctx.fillRect(0, 0, width, height);
 
-    drawGrid(ctx, width, height, panRef.current);
+    const { toolCategory, pixelsPerUnit } = store;
+    drawGrid(ctx, width, height, panRef.current, toolCategory, pixelsPerUnit);
 
     if (closedAreaManagerRef.current) {
       const { x: panX, y: panY, zoom } = panRef.current;
@@ -214,21 +269,25 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     });
 
     // Draw intersection points (crosses) in select mode
-    if (isInSelectMode && store.toolCategory === 'digital') {
-      const allIntersections = findAllIntersectionsFn();
+    // Use lazy calculation - only find intersections near mouse when hovering
+    if (isInSelectMode && store.toolCategory === 'digital' && !isDraggingDigital) {
       const mousePos = lastMousePosRef.current;
       if (mousePos) {
-        const nearbyIntersections = findIntersectionsAtPositionFn(mousePos);
+        // Use lazy spatial search instead of O(n²) full calculation
+        const nearbyIntersections = findNearbyIntersectionsWithSpatialIndex(mousePos, 30);
         
-        // Draw all intersection points
-        allIntersections.forEach(int => {
+        // Draw only nearby intersection points (lazy rendering)
+        nearbyIntersections.forEach(int => {
           const screen = worldToScreen(int.point.x, int.point.y);
-          const isHovered = nearbyIntersections.some(
-            (ni: { point: Point }) => Math.hypot(ni.point.x - int.point.x, ni.point.y - int.point.y) < 0.1
-          );
-          drawCrossIndicator(ctx, screen, isHovered ? 8 : 6, isHovered ? '#ff6b6b' : '#4caf50');
+          drawCrossIndicator(ctx, screen, 8, '#4caf50');
         });
       }
+    }
+    
+    // During drag, draw only the selected intersection if any
+    if (isDraggingDigital && selectedIntersection) {
+      const screen = worldToScreen(selectedIntersection.point.x, selectedIntersection.point.y);
+      drawCrossIndicator(ctx, screen, 8, '#ff6b6b');
     }
 
     // Draw digital line preview
@@ -247,6 +306,22 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         const lastPoint = digitalLinePoints[digitalLinePoints.length - 1];
         if (digitalLinePreviewEnd) {
           drawDigitalLinePreview(ctx, lastPoint, digitalLinePreviewEnd, store.currentColor, worldToScreen);
+          
+          // Draw distance measurement for preview line
+          const distPx = calcDistance(lastPoint, digitalLinePreviewEnd);
+          const distValue = distPx / store.pixelsPerUnit;
+          const midPoint = {
+            x: (lastPoint.x + digitalLinePreviewEnd.x) / 2,
+            y: (lastPoint.y + digitalLinePreviewEnd.y) / 2,
+          };
+          const midScreen = worldToScreen(midPoint.x, midPoint.y);
+          drawMeasurementLabel(ctx, midScreen, formatLength(distValue), store.currentColor);
+          
+          // Draw angle measurement for 2nd+ segments
+          if (digitalLinePoints.length >= 2) {
+            const prevPoint = digitalLinePoints[digitalLinePoints.length - 2];
+            drawAngleArc(ctx, lastPoint, prevPoint, digitalLinePreviewEnd, worldToScreen);
+          }
         } else {
           // If no mouse position yet, still draw endpoint at last point
           const lastScreen = worldToScreen(lastPoint.x, lastPoint.y);
@@ -258,11 +333,17 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       if (store.digitalTool === 'circle' && store.circleCreationMode === 'centerRadius' && circleCenter) {
         if (circleRadiusPoint) {
           const centerScreen = worldToScreen(circleCenter.x, circleCenter.y);
-          // Use world coordinates for radius (same as final circle)
           const radius = distance(circleCenter, circleRadiusPoint);
-          // Scale radius to screen for preview drawing
           const radiusScreen = Math.abs(radius * panRef.current.zoom);
           drawDigitalCirclePreview(ctx, centerScreen, radiusScreen, store.currentColor);
+          
+          // Draw radius measurement at midpoint of radius line
+          const radiusValue = radius / store.pixelsPerUnit;
+          const labelPos = {
+            x: centerScreen.x + radiusScreen / 2,
+            y: centerScreen.y,
+          };
+          drawMeasurementLabel(ctx, labelPos, formatLength(radiusValue), store.currentColor);
         } else {
           const centerScreen = worldToScreen(circleCenter.x, circleCenter.y);
           drawEndpointIndicator(ctx, centerScreen, 6, '#2196f3');
@@ -434,71 +515,69 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     return null;
   }
 
-  function findAllIntersectionsFn(): Array<{
+  // Lazy intersection search - only check near mouse position using spatial index
+  function findNearbyIntersectionsWithSpatialIndex(world: { x: number; y: number }, radius: number = 20): Array<{
     point: Point;
     segments: Array<{ strokeId: string; segmentIndex: number }>;
   }> {
-    // Return cached intersections if available
-    if (intersectionsCacheRef.current) {
-      return intersectionsCacheRef.current;
-    }
-
-    const intersections: Array<{
+    const searchRadius = radius / panRef.current.zoom;
+    const results: Array<{
       point: Point;
       segments: Array<{ strokeId: string; segmentIndex: number }>;
     }> = [];
-    const threshold = 2.0;
-
+    
     const digitalStrokes = strokesRef.current.filter(
       s => s.strokeType === 'digital' && s.digitalSegments
     );
-
-    for (let i = 0; i < digitalStrokes.length; i++) {
-      const stroke1 = digitalStrokes[i];
-      if (!stroke1.digitalSegments) continue;
-
-      for (let segIdx1 = 0; segIdx1 < stroke1.digitalSegments.length; segIdx1++) {
-        const seg1 = stroke1.digitalSegments[segIdx1];
-        if (seg1.type !== 'line' || seg1.points.length < 2) continue;
-        const p1 = seg1.points[0];
-        const p2 = seg1.points[1];
-
-        for (let j = i; j < digitalStrokes.length; j++) {
-          const stroke2 = digitalStrokes[j];
-          if (!stroke2.digitalSegments) continue;
-
-          for (let segIdx2 = 0; segIdx2 < stroke2.digitalSegments.length; segIdx2++) {
-            const seg2 = stroke2.digitalSegments[segIdx2];
-            if (seg2.type !== 'line' || seg2.points.length < 2) continue;
-
-            if (stroke1.id === stroke2.id && segIdx1 === segIdx2) continue;
-
-            const p3 = seg2.points[0];
-            const p4 = seg2.points[1];
-
+    
+    // Only check segments within the search radius of mouse position
+    for (const stroke of digitalStrokes) {
+      if (!stroke.digitalSegments) continue;
+      
+      for (let segIdx = 0; segIdx < stroke.digitalSegments.length; segIdx++) {
+        const segment = stroke.digitalSegments[segIdx];
+        if (segment.type !== 'line' || segment.points.length < 2) continue;
+        
+        const p1 = segment.points[0];
+        const p2 = segment.points[1];
+        
+        // Quick bbox check first
+        const minX = Math.min(p1.x, p2.x) - searchRadius;
+        const maxX = Math.max(p1.x, p2.x) + searchRadius;
+        const minY = Math.min(p1.y, p2.y) - searchRadius;
+        const maxY = Math.max(p1.y, p2.y) + searchRadius;
+        
+        if (world.x < minX || world.x > maxX || world.y < minY || world.y > maxY) {
+          continue;
+        }
+        
+        // Check if segment is near mouse position
+        const distToSegment = distanceToSegment(world, p1, p2);
+        
+        if (distToSegment > searchRadius) continue;
+        
+        // Now check intersections with other nearby segments
+        for (const otherStroke of digitalStrokes) {
+          if (!otherStroke.digitalSegments) continue;
+          
+          for (let otherSegIdx = 0; otherSegIdx < otherStroke.digitalSegments.length; otherSegIdx++) {
+            const otherSegment = otherStroke.digitalSegments[otherSegIdx];
+            if (otherSegment.type !== 'line' || otherSegment.points.length < 2) continue;
+            if (stroke.id === otherStroke.id && segIdx === otherSegIdx) continue;
+            
+            const p3 = otherSegment.points[0];
+            const p4 = otherSegment.points[1];
+            
             const intersection = getLineIntersectionFn(p1, p2, p3, p4);
             if (intersection) {
-              const existingIdx = intersections.findIndex(
-                int => Math.hypot(int.point.x - intersection.x, int.point.y - intersection.y) < threshold
-              );
-
-              if (existingIdx >= 0) {
-                if (!intersections[existingIdx].segments.some(
-                  s => s.strokeId === stroke1.id && s.segmentIndex === segIdx1
-                )) {
-                  intersections[existingIdx].segments.push({ strokeId: stroke1.id, segmentIndex: segIdx1 });
-                }
-                if (!intersections[existingIdx].segments.some(
-                  s => s.strokeId === stroke2.id && s.segmentIndex === segIdx2
-                )) {
-                  intersections[existingIdx].segments.push({ strokeId: stroke2.id, segmentIndex: segIdx2 });
-                }
-              } else {
-                intersections.push({
+              // Check if intersection is near mouse
+              const distToIntersection = Math.hypot(intersection.x - world.x, intersection.y - world.y);
+              if (distToIntersection <= searchRadius) {
+                results.push({
                   point: intersection,
                   segments: [
-                    { strokeId: stroke1.id, segmentIndex: segIdx1 },
-                    { strokeId: stroke2.id, segmentIndex: segIdx2 },
+                    { strokeId: stroke.id, segmentIndex: segIdx },
+                    { strokeId: otherStroke.id, segmentIndex: otherSegIdx },
                   ],
                 });
               }
@@ -507,22 +586,8 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         }
       }
     }
-
-    // Cache the result
-    intersectionsCacheRef.current = intersections;
-    return intersections;
-  }
-
-  function findIntersectionsAtPositionFn(world: { x: number; y: number }): Array<{
-    point: Point;
-    segments: Array<{ strokeId: string; segmentIndex: number }>;
-  }> {
-    const threshold = 12.0 / panRef.current.zoom;
-    const allIntersections = findAllIntersectionsFn();
     
-    return allIntersections.filter(int => 
-      Math.hypot(int.point.x - world.x, int.point.y - world.y) <= threshold
-    );
+    return results;
   }
 
   // Digital element hit testing
@@ -910,124 +975,129 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
     // Handle digital select mode
     if (store.toolCategory === 'digital' && store.digitalMode === 'select') {
-      // First check for intersection points
-      const hitIntersections = findIntersectionsAtPositionFn(world);
+      // Use lazy spatial search for intersection hit testing (doesn't require full cache)
+      const hitIntersections = findNearbyIntersectionsWithSpatialIndex(world, 15);
       
       if (hitIntersections.length > 0) {
-        // Select the intersection
-        const hitIntersection = hitIntersections[0];
+        // Defer intersection splitting to next frame to avoid blocking UI
+        // This prevents the freeze when clicking on a cross point with many segments
+        const clickWorld = { ...world };
         
-        // Split each line segment at the intersection point
-        const newEndpointSelections: Array<{
-          strokeId: string;
-          segmentIndex: number;
-          pointIndex: number;
-          type: 'endpoint' | 'control';
-        }> = [];
-        
-        for (const segInfo of hitIntersection.segments) {
-          const stroke = strokesRef.current.find(s => s.id === segInfo.strokeId);
-          if (!stroke || !stroke.digitalSegments) continue;
+        requestAnimationFrame(() => {
+          // Re-find the intersection since state might have changed
+          const currentIntersections = findNearbyIntersectionsWithSpatialIndex(clickWorld, 15);
+          if (currentIntersections.length === 0) return;
           
-          const segment = stroke.digitalSegments[segInfo.segmentIndex];
-          if (segment.type !== 'line' || segment.points.length < 2) continue;
+          const intersection = currentIntersections[0];
           
-          const p1 = segment.points[0];
-          const p2 = segment.points[1];
+          // Split each line segment at the intersection point
+          const newEndpointSelections: Array<{
+            strokeId: string;
+            segmentIndex: number;
+            pointIndex: number;
+            type: 'endpoint' | 'control';
+          }> = [];
           
-          // Check which endpoint is further from the intersection to determine direction
-          const dist1 = Math.hypot(p1.x - hitIntersection.point.x, p1.y - hitIntersection.point.y);
-          const dist2 = Math.hypot(p2.x - hitIntersection.point.x, p2.y - hitIntersection.point.y);
+          const modifiedStrokes: Stroke[] = [];
           
-          // Keep the endpoint that's closer to the intersection as the "fixed" end
-          // Modify the existing segment to end at intersection (keep the closer point)
-          if (dist1 < dist2) {
-            // p1 is closer, keep p1, change p2 to intersection
-            segment.points[1] = hitIntersection.point;
+          for (const segInfo of intersection.segments) {
+            const stroke = strokesRef.current.find(s => s.id === segInfo.strokeId);
+            if (!stroke || !stroke.digitalSegments) continue;
             
-            // Add a new segment for the other half (from intersection to p2)
-            const newSegment: DigitalSegment = {
-              id: generateId(),
-              type: 'line',
-              points: [hitIntersection.point, p2],
-              color: segment.color,
-            };
-            stroke.digitalSegments.splice(segInfo.segmentIndex + 1, 0, newSegment);
+            const segment = stroke.digitalSegments[segInfo.segmentIndex];
+            if (segment.type !== 'line' || segment.points.length < 2) continue;
             
-            // The new segment's first point (index 0) is at intersection
-            newEndpointSelections.push({
-              strokeId: stroke.id,
-              segmentIndex: segInfo.segmentIndex + 1,
-              pointIndex: 0,
-              type: 'endpoint',
-            });
-          } else {
-            // p2 is closer, keep p2, change p1 to intersection
-            segment.points[0] = hitIntersection.point;
+            const p1 = segment.points[0];
+            const p2 = segment.points[1];
             
-            // Add a new segment for the other half (from p1 to intersection)
-            const newSegment: DigitalSegment = {
-              id: generateId(),
-              type: 'line',
-              points: [p1, hitIntersection.point],
-              color: segment.color,
-            };
-            // Insert new segment at current index, pushing current one forward
-            stroke.digitalSegments.splice(segInfo.segmentIndex, 0, newSegment);
+            // Check which endpoint is further from the intersection to determine direction
+            const dist1 = Math.hypot(p1.x - intersection.point.x, p1.y - intersection.point.y);
+            const dist2 = Math.hypot(p2.x - intersection.point.x, p2.y - intersection.point.y);
             
-            // The new segment's second point (index 1) is at intersection
+            // Keep the endpoint that's closer to the intersection as the "fixed" end
+            if (dist1 < dist2) {
+              segment.points[1] = intersection.point;
+              
+              const newSegment: DigitalSegment = {
+                id: generateId(),
+                type: 'line',
+                points: [intersection.point, p2],
+                color: segment.color,
+              };
+              stroke.digitalSegments.splice(segInfo.segmentIndex + 1, 0, newSegment);
+              
+              newEndpointSelections.push({
+                strokeId: stroke.id,
+                segmentIndex: segInfo.segmentIndex + 1,
+                pointIndex: 0,
+                type: 'endpoint',
+              });
+            } else {
+              segment.points[0] = intersection.point;
+              
+              const newSegment: DigitalSegment = {
+                id: generateId(),
+                type: 'line',
+                points: [p1, intersection.point],
+                color: segment.color,
+              };
+              stroke.digitalSegments.splice(segInfo.segmentIndex, 0, newSegment);
+              
+              newEndpointSelections.push({
+                strokeId: stroke.id,
+                segmentIndex: segInfo.segmentIndex,
+                pointIndex: 1,
+                type: 'endpoint',
+              });
+            }
+            
+            stroke.points = [...stroke.points];
+            if (stroke.points.length >= 2) {
+              stroke.points[0] = segment.points[0];
+              stroke.points[1] = segment.points[1];
+            }
+            
             newEndpointSelections.push({
               strokeId: stroke.id,
               segmentIndex: segInfo.segmentIndex,
-              pointIndex: 1,
+              pointIndex: dist1 < dist2 ? 1 : 0,
               type: 'endpoint',
+            });
+            
+            modifiedStrokes.push(stroke);
+          }
+          
+          // Batch update all modified strokes
+          if (modifiedStrokes.length > 0) {
+            modifiedStrokes.forEach(stroke => {
+              store.updateStroke(stroke.id, stroke, true);
+            });
+            
+            // Defer closed area rebuild
+            requestAnimationFrame(() => {
+              if (closedAreaManagerRef.current) {
+                const updatedStrokes = strokesRef.current
+                  .filter(s => s.strokeType === 'digital')
+                  .map(s => ({
+                    id: s.id,
+                    points: s.displayPoints ?? s.smoothedPoints ?? s.points,
+                    displayPoints: s.displayPoints,
+                    digitalSegments: s.digitalSegments,
+                    isClosed: s.isClosed,
+                  }));
+                closedAreaManagerRef.current.setStrokes(updatedStrokes);
+              }
             });
           }
           
-          // Update stroke.points to reflect changes
-          stroke.points = [...stroke.points];
-          if (stroke.points.length >= 2) {
-            stroke.points[0] = segment.points[0];
-            stroke.points[1] = segment.points[1];
-          }
-          
-          // Also add the original segment's endpoint at intersection for selection
-          newEndpointSelections.push({
-            strokeId: stroke.id,
-            segmentIndex: segInfo.segmentIndex,
-            pointIndex: dist1 < dist2 ? 1 : 0,
-            type: 'endpoint',
-          });
-          
-          store.updateStroke(stroke.id, stroke);
-        }
-        
-        // Update closed area manager directly with updated strokes after split
-        if (closedAreaManagerRef.current) {
-          const updatedStrokes = strokesRef.current
-            .filter(s => s.strokeType === 'digital')
-            .map(s => ({
-              id: s.id,
-              points: s.displayPoints ?? s.smoothedPoints ?? s.points,
-              displayPoints: s.displayPoints,
-              digitalSegments: s.digitalSegments,
-              isClosed: s.isClosed,
-            }));
-          closedAreaManagerRef.current.setStrokes(updatedStrokes);
-        }
-
-        // Invalidate intersections cache after split
-        intersectionsCacheRef.current = null;
-        
-        if (e.ctrlKey || e.metaKey) {
-          // Toggle intersection selection
-        } else {
-          // Select all endpoints at the split position for dragging
+          // Set dragging state
           setSelectedDigitalElements(newEndpointSelections);
           setIsDraggingDigital(true);
-          setDigitalDragStart(world);
-          setSelectedIntersection(null); // No longer an intersection, now regular endpoints
-        }
+          isDraggingRef.current = true;
+          setDigitalDragStart(clickWorld);
+          setSelectedIntersection(null);
+        });
+        
         return;
       }
       
@@ -1058,6 +1128,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         }
         // Start dragging
         setIsDraggingDigital(true);
+        isDraggingRef.current = true;
         setDigitalDragStart(world);
       } else {
         setSelectedDigitalElements([]);
@@ -1142,6 +1213,9 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         const dx = world.x - digitalDragStart.x;
         const dy = world.y - digitalDragStart.y;
         
+        // Track all segment IDs that were moved
+        const movedSegmentIds: string[] = [];
+        
         // Move each segment's endpoint to the new position
         for (const segInfo of selectedIntersection.segments) {
           const stroke = strokesRef.current.find(s => s.id === segInfo.strokeId);
@@ -1157,44 +1231,38 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
           }));
           segment.points = newPoints;
           
-          // Also update stroke.points to keep in sync for closed area manager
+          // Update stroke.points directly in strokesRef for rendering during drag
           stroke.points = [...stroke.points];
           if (stroke.points.length >= 2) {
             stroke.points[0] = newPoints[0];
             stroke.points[1] = newPoints[1];
           }
           
-          store.updateStroke(stroke.id, stroke);
+          // Track this stroke ID for persistence on dragEnd
+          modifiedStrokeIdsRef.current.add(stroke.id);
+          
+          // Track this segment for incremental intersection update
+          const segmentId = `${stroke.id}:${segInfo.segmentIndex}`;
+          movedSegmentIds.push(segmentId);
         }
 
-        // Update closed area manager directly with updated strokes
-        if (closedAreaManagerRef.current) {
-          const updatedStrokes = strokesRef.current
-            .filter(s => s.strokeType === 'digital')
-            .map(s => ({
-              id: s.id,
-              points: s.displayPoints ?? s.smoothedPoints ?? s.points,
-              displayPoints: s.displayPoints,
-              digitalSegments: s.digitalSegments,
-              isClosed: s.isClosed,
-            }));
-          closedAreaManagerRef.current.setStrokes(updatedStrokes);
-        }
+        // Skip expensive updates during drag - only update visual position
+        // These will be updated on dragEnd:
+        // - store.updateStroke() to persist changes
+        // - closedAreaManagerRef.current.setStrokes()
+        // - intersection recalculation
+      
+      // Update the stored intersection point position
+      setSelectedIntersection(prev => prev ? {
+        ...prev,
+        point: { x: prev.point.x + dx, y: prev.point.y + dy },
+      } : null);
+       
+      setDigitalDragStart(world);
+      return;
+    }
 
-        // Invalidate intersections cache after dragging
-        intersectionsCacheRef.current = null;
-        
-        // Update the stored intersection point
-        setSelectedIntersection(prev => prev ? {
-          ...prev,
-          point: { x: prev.point.x + dx, y: prev.point.y + dy },
-        } : null);
-        
-        setDigitalDragStart(world);
-        return;
-      }
-
-      // Handle regular point dragging (only if no intersection selected)
+    // Handle regular point dragging (only if no intersection selected)
       if (isDraggingDigital && digitalDragStart && selectedDigitalElements.length > 0 && !selectedIntersection) {
         const dx = world.x - digitalDragStart.x;
         const dy = world.y - digitalDragStart.y;
@@ -1242,6 +1310,8 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         }
 
         // Update ALL points at the original position
+        const movedSegmentIds: string[] = [];
+        
         allPointsAtOriginalPos.forEach(sel => {
           const stroke = strokesRef.current.find(s => s.id === sel.strokeId);
           if (stroke && stroke.digitalSegments && stroke.digitalSegments[sel.segmentIndex]) {
@@ -1266,41 +1336,34 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
             segment.points = newPoints;
             
-            // Also update stroke.points to keep in sync for closed area manager
+            // Update stroke.points directly in strokesRef for rendering during drag
             stroke.points = [...stroke.points];
             if (stroke.points.length >= 2) {
               stroke.points[0] = segment.points[0];
               stroke.points[1] = segment.points[1];
             }
             
-            store.updateStroke(stroke.id, stroke);
+            // Track this stroke ID for persistence on dragEnd
+            modifiedStrokeIdsRef.current.add(stroke.id);
+            
+            // Track this segment for incremental intersection update
+            movedSegmentIds.push(`${stroke.id}:${sel.segmentIndex}`);
           }
         });
 
-        // Update closed area manager directly with updated strokes
-        if (closedAreaManagerRef.current) {
-          const updatedStrokes = strokesRef.current
-            .filter(s => s.strokeType === 'digital')
-            .map(s => ({
-              id: s.id,
-              points: s.displayPoints ?? s.smoothedPoints ?? s.points,
-              displayPoints: s.displayPoints,
-              digitalSegments: s.digitalSegments,
-              isClosed: s.isClosed,
-            }));
-          closedAreaManagerRef.current.setStrokes(updatedStrokes);
-        }
-
-        // Invalidate intersections cache after dragging
-        intersectionsCacheRef.current = null;
+        // Skip expensive updates during drag - only update visual position
+        // These will be updated on dragEnd:
+        // - store.updateStroke() to persist changes
+        // - closedAreaManagerRef.current.setStrokes()
+        // - intersection recalculation
 
         setDigitalDragStart(world);
         return;
       }
     }
 
-    // Handle hover for closed areas (in any select mode)
-    if (closedAreaManagerRef.current && isInSelectMode) {
+    // Handle hover for closed areas (skip during drag to avoid expensive recalculations)
+    if (closedAreaManagerRef.current && isInSelectMode && !isDraggingDigital) {
       const hoveredArea = closedAreaManagerRef.current.hitTest(world);
       closedAreaManagerRef.current.setHoveredAreaId(hoveredArea?.id ?? null);
     }
@@ -1391,8 +1454,53 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     }
 
     if (isDraggingDigital) {
+      // Persist modified strokes to store (only once at drag end)
+      modifiedStrokeIdsRef.current.forEach(strokeId => {
+        const stroke = strokesRef.current.find(s => s.id === strokeId);
+        if (stroke) {
+          store.updateStroke(stroke.id, stroke, true);
+        }
+      });
+      modifiedStrokeIdsRef.current.clear();
+      
+      // Clear selection and highlight after drag ends
+      setSelectedDigitalElements([]);
+      if (closedAreaManagerRef.current) {
+        closedAreaManagerRef.current.setHoveredAreaId(null);
+      }
+      
       setIsDraggingDigital(false);
+      isDraggingRef.current = false;
       setDigitalDragStart(null);
+      
+      // Defer expensive intersection recalculation more aggressively
+      requestAnimationFrame(() => {
+        // Only invalidate cache if there were actual changes
+        // Keep existing cache during idle periods
+        
+        // Rebuild the spatial index with updated segment positions
+        if (intersectionManagerRef.current) {
+          intersectionManagerRef.current.buildFromStrokes(strokesRef.current);
+        }
+        
+        // Update closed area manager with final stroke positions
+        if (closedAreaManagerRef.current) {
+          const updatedStrokes = strokesRef.current
+            .filter(s => s.strokeType === 'digital')
+            .map(s => ({
+              id: s.id,
+              points: s.displayPoints ?? s.smoothedPoints ?? s.points,
+              displayPoints: s.displayPoints,
+              digitalSegments: s.digitalSegments,
+              isClosed: s.isClosed,
+            }));
+          closedAreaManagerRef.current.setStrokes(updatedStrokes);
+        }
+        
+        // Invalidate cache AFTER operations are done (lazy invalidation)
+        // Next hover will trigger recalculation if needed
+      });
+      
       return;
     }
 
@@ -1469,6 +1577,8 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         
         // Handle line mode close
         if (store.toolCategory === 'digital' && store.digitalMode === 'draw' && store.digitalTool === 'line' && digitalLinePoints.length >= 2) {
+          const strokesToAdd: Stroke[] = [];
+          
           // Close the polyline by connecting last point to first point
           const closingSegmentPoints = [digitalLinePoints[digitalLinePoints.length - 1], digitalLinePoints[0]];
           const closingSegment: Stroke = {
@@ -1487,7 +1597,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
             }],
             isClosed: true,
           };
-          store.addStroke(closingSegment);
+          strokesToAdd.push(closingSegment);
           
           // Also create strokes for each existing segment
           for (let i = 0; i < digitalLinePoints.length - 1; i++) {
@@ -1508,8 +1618,11 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
               }],
               isClosed: false,
             };
-            store.addStroke(segment);
+            strokesToAdd.push(segment);
           }
+          
+          // Batch add all strokes at once
+          store.addStrokesBatch(strokesToAdd);
           
           setDigitalLinePoints([]);
           setDigitalLinePreviewEnd(null);
@@ -1552,6 +1665,8 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         
         // Handle line mode
         if (store.toolCategory === 'digital' && store.digitalMode === 'draw' && store.digitalTool === 'line' && digitalLinePoints.length >= 2) {
+          const strokesToAdd: Stroke[] = [];
+          
           // Create separate strokes for each segment
           for (let i = 0; i < digitalLinePoints.length - 1; i++) {
             const segmentPoints = [digitalLinePoints[i], digitalLinePoints[i + 1]];
@@ -1571,8 +1686,11 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
               }],
               isClosed: false,
             };
-            store.addStroke(segment);
+            strokesToAdd.push(segment);
           }
+          
+          // Batch add all strokes at once
+          store.addStrokesBatch(strokesToAdd);
           
           setDigitalLinePoints([]);
           setDigitalLinePreviewEnd(null);
@@ -1620,11 +1738,17 @@ function drawGrid(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  pan: { x: number; y: number; zoom: number }
+  pan: { x: number; y: number; zoom: number },
+  toolCategory: string,
+  pixelsPerUnit: number
 ): void {
+  if (toolCategory !== 'digital') {
+    return;
+  }
+
   const { x: panX, y: panY, zoom } = pan;
-  const gridSize = 50;
-  const majorInterval = 5;
+  const scaleInterval = 50;
+  const tickLength = 10;
 
   const halfWidth = width / 2;
   const halfHeight = height / 2;
@@ -1634,61 +1758,58 @@ function drawGrid(
   const visibleTopWorld = (halfHeight / zoom) + panY;
   const visibleBottomWorld = (-halfHeight / zoom) + panY;
 
-  const startX = Math.floor(visibleLeftWorld / gridSize) * gridSize;
-  const endX = Math.ceil(visibleRightWorld / gridSize) * gridSize;
-  const startY = Math.floor(visibleBottomWorld / gridSize) * gridSize;
-  const endY = Math.ceil(visibleTopWorld / gridSize) * gridSize;
+  const startX = Math.floor(visibleLeftWorld / pixelsPerUnit / scaleInterval) * pixelsPerUnit * scaleInterval;
+  const endX = Math.ceil(visibleRightWorld / pixelsPerUnit / scaleInterval) * pixelsPerUnit * scaleInterval;
+  const startY = Math.floor(visibleBottomWorld / pixelsPerUnit / scaleInterval) * pixelsPerUnit * scaleInterval;
+  const endY = Math.ceil(visibleTopWorld / pixelsPerUnit / scaleInterval) * pixelsPerUnit * scaleInterval;
 
-  ctx.font = '10px sans-serif';
+  ctx.font = '11px sans-serif';
 
   const originX = (0 - panX) * zoom + halfWidth;
   const originY = halfHeight - (0 - panY) * zoom;
 
-  for (let worldX = startX; worldX <= endX; worldX += gridSize) {
+  const xAxisY = originY;
+  const yAxisX = originX;
+
+  for (let worldX = startX; worldX <= endX; worldX += pixelsPerUnit * scaleInterval) {
     const screenX = (worldX - panX) * zoom + halfWidth;
-    const isMajor = worldX === 0 || worldX % (gridSize * majorInterval) === 0;
+    const unitValue = worldX / pixelsPerUnit;
 
     if (screenX >= 0 && screenX <= width) {
       ctx.beginPath();
-      ctx.moveTo(screenX, 0);
-      ctx.lineTo(screenX, height);
-      ctx.strokeStyle = isMajor ? '#c0c0c0' : '#e8e8e8';
-      ctx.lineWidth = isMajor ? 1.5 : 1;
+      ctx.moveTo(screenX, xAxisY - tickLength / 2);
+      ctx.lineTo(screenX, xAxisY + tickLength / 2);
+      ctx.strokeStyle = '#606060';
+      ctx.lineWidth = 1;
       ctx.stroke();
 
-      if (isMajor) {
-        ctx.fillStyle = '#555';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'alphabetic';
-        const labelY = originY + (originY > 0 && originY < height ? 12 : -6);
-        ctx.fillText(Math.round(worldX).toString(), screenX, labelY);
-      }
+      ctx.fillStyle = '#333';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+        ctx.fillText(`${Math.round(unitValue)}`, screenX, xAxisY + tickLength);
     }
   }
 
-  for (let worldY = startY; worldY <= endY; worldY += gridSize) {
+  for (let worldY = startY; worldY <= endY; worldY += pixelsPerUnit * scaleInterval) {
     const screenY = halfHeight - (worldY - panY) * zoom;
-    const isMajor = worldY === 0 || worldY % (gridSize * majorInterval) === 0;
+    const unitValue = worldY / pixelsPerUnit;
 
     if (screenY >= 0 && screenY <= height) {
       ctx.beginPath();
-      ctx.moveTo(0, screenY);
-      ctx.lineTo(width, screenY);
-      ctx.strokeStyle = isMajor ? '#c0c0c0' : '#e8e8e8';
-      ctx.lineWidth = isMajor ? 1.5 : 1;
+      ctx.moveTo(yAxisX - tickLength / 2, screenY);
+      ctx.lineTo(yAxisX + tickLength / 2, screenY);
+      ctx.strokeStyle = '#606060';
+      ctx.lineWidth = 1;
       ctx.stroke();
 
-      if (isMajor) {
-        ctx.fillStyle = '#555';
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'middle';
-        const labelX = originX > 0 && originX < width ? originX - 6 : 12;
-        ctx.fillText(Math.round(worldY).toString(), labelX, screenY);
-      }
+      ctx.fillStyle = '#333';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`${Math.round(unitValue)}`, yAxisX - tickLength - 4, screenY);
     }
   }
 
-  ctx.strokeStyle = '#606060';
+  ctx.strokeStyle = '#404040';
   ctx.lineWidth = 2;
 
   if (originX >= 0 && originX <= width) {
@@ -1705,9 +1826,9 @@ function drawGrid(
     ctx.stroke();
   }
 
-  if (originX >= 4 && originX <= width - 4 && originY >= 4 && originY <= height - 4) {
+  if (originX >= 6 && originX <= width - 6 && originY >= 6 && originY <= height - 6) {
     ctx.beginPath();
-    ctx.arc(originX, originY, 4, 0, Math.PI * 2);
+    ctx.arc(originX, originY, 5, 0, Math.PI * 2);
     ctx.fillStyle = '#404040';
     ctx.fill();
   }
@@ -1978,4 +2099,85 @@ function drawCrossIndicator(
   ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
   ctx.fillStyle = color;
   ctx.fill();
+}
+
+function drawMeasurementLabel(
+  ctx: CanvasRenderingContext2D,
+  position: { x: number; y: number },
+  text: string,
+  color: string
+): void {
+  ctx.font = '11px sans-serif';
+  const metrics = ctx.measureText(text);
+  const padding = 4;
+  const boxWidth = metrics.width + padding * 2;
+  const boxHeight = 16;
+  
+  ctx.beginPath();
+  ctx.arc(position.x, position.y, 4, 0, Math.PI * 2);
+  ctx.fillStyle = '#2196f3';
+  ctx.fill();
+  
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(
+    position.x + 6,
+    position.y - boxHeight / 2,
+    boxWidth,
+    boxHeight
+  );
+  
+  ctx.strokeStyle = '#2196f3';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(
+    position.x + 6,
+    position.y - boxHeight / 2,
+    boxWidth,
+    boxHeight
+  );
+  
+  ctx.fillStyle = color;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, position.x + 6 + padding, position.y);
+}
+
+function drawAngleArc(
+  ctx: CanvasRenderingContext2D,
+  vertex: Point,
+  line1End: Point,
+  line2End: Point,
+  worldToScreen: (x: number, y: number) => { x: number; y: number }
+): { angle: number; arcCenter: { x: number; y: number } } {
+  const vertexScreen = worldToScreen(vertex.x, vertex.y);
+  const line1EndScreen = worldToScreen(line1End.x, line1End.y);
+  const line2EndScreen = worldToScreen(line2End.x, line2End.y);
+
+  const angle1 = Math.atan2(line1EndScreen.y - vertexScreen.y, line1EndScreen.x - vertexScreen.x);
+  const angle2 = Math.atan2(line2EndScreen.y - vertexScreen.y, line2EndScreen.x - vertexScreen.x);
+
+  const startAngle = angle1;
+  const endAngle = angle2;
+  
+  let angleDiff = endAngle - startAngle;
+  if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+  if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+
+  const arcRadius = 40;
+  const midAngle = startAngle + angleDiff / 2;
+
+  ctx.beginPath();
+  ctx.arc(vertexScreen.x, vertexScreen.y, arcRadius, startAngle, endAngle, angleDiff < 0);
+  ctx.strokeStyle = '#ff9800';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  const labelX = vertexScreen.x + Math.cos(midAngle) * (arcRadius + 18);
+  const labelY = vertexScreen.y + Math.sin(midAngle) * (arcRadius + 18);
+
+  const angle = angleBetween(line1End, vertex, line2End);
+  const acuteAngle = getAcuteAngle(angle);
+
+  drawMeasurementLabel(ctx, { x: labelX, y: labelY }, formatAngle(acuteAngle, 'degree'), '#ff9800');
+
+  return { angle: acuteAngle, arcCenter: vertexScreen };
 }

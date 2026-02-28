@@ -19,6 +19,7 @@ export class ClosedAreaManager {
   private dragState: DragState | null = null;
   private highlightStyle: HighlightStyle;
   private onChangeCallback: (() => void) | null = null;
+  private rebuildTimeoutId: number | null = null;
 
   constructor(highlightStyle?: Partial<HighlightStyle>) {
     this.highlightStyle = { ...DEFAULT_HIGHLIGHT_STYLE, ...highlightStyle };
@@ -36,10 +37,25 @@ export class ClosedAreaManager {
 
   setStrokes(strokes: Stroke[]): void {
     this.strokes = strokes;
-    this.rebuild();
+    
+    // Debounce rebuilds to avoid blocking UI during rapid updates
+    if (this.rebuildTimeoutId !== null) {
+      cancelAnimationFrame(this.rebuildTimeoutId);
+    }
+    
+    // Use setTimeout for longer debounce (200ms) to avoid blocking UI
+    this.rebuildTimeoutId = window.setTimeout(() => {
+      this.rebuild();
+      this.rebuildTimeoutId = null;
+    }, 200);
   }
 
   forceRebuild(): void {
+    // Cancel any pending rebuild and rebuild immediately
+    if (this.rebuildTimeoutId !== null) {
+      cancelAnimationFrame(this.rebuildTimeoutId);
+      this.rebuildTimeoutId = null;
+    }
     this.rebuild();
   }
 
