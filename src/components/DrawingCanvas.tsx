@@ -6,7 +6,8 @@ import { simplifyStroke } from '../brush/strokeSimplifier';
 import { predictShape } from '../shapeRecognition';
 import { ClosedAreaManager } from '../fillRegion';
 import { IntersectionManager } from '../intersection/IntersectionManager';
-import { formatLength, formatAngle, getAcuteAngle, distance as calcDistance, angleBetween } from '../measurements';
+import { formatLength, formatAngle, getAcuteAngle, distance as calcDistance, angleBetween, findBestSnapPoint, type SnapResult, pixelsToUnit, findLineIntersection, checkParallelLines, lineCircleIntersections, closestPointOnSegment } from '../measurements';
+import { chooseIntersectionByMouseAngle } from '../utils/angleHelpers';
 import './DrawingCanvas.css';
 
 interface CanvasProps {
@@ -40,6 +41,11 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
   
   // Curve drawing state  
   const [curvePoints, setCurvePoints] = useState<Point[]>([]);
+
+  // Arc drawing state
+  const [arcPoints, setArcPoints] = useState<Point[]>([]);
+  const [arcRadiusPoint, setArcRadiusPoint] = useState<Point | null>(null);
+  const arcPointsRef = useRef<Point[]>([]);
   
   // Digital selection/dragging state
   const [hoveredDigitalElement, setHoveredDigitalElement] = useState<{
@@ -77,6 +83,14 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
   const panRef = useRef({ x: store.panX, y: store.panY, zoom: store.zoom });
   const brushSettingsRef = useRef(store.currentBrushSettings);
   const lastMousePosRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Snap state refs
+  const currentSnapRef = useRef<SnapResult | null>(null);
+  const snapThresholdRef = useRef(5);
+
+  // Measure state refs
+  const measurePreviewRef = useRef<{ startPoint: Point; endPoint: Point } | null>(null);
+  const mouseWorldRef = useRef<Point | null>(null);
 
   useEffect(() => {
     closedAreaManagerRef.current = new ClosedAreaManager();
@@ -160,6 +174,21 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     brushSettingsRef.current = store.currentBrushSettings;
   }, [store.currentBrushSettings]);
 
+  useEffect(() => {
+    if (store.drawingClearCounter > 0) {
+      setDigitalLinePoints([]);
+      setDigitalLinePreviewEnd(null);
+      setCircleCenter(null);
+      setCircleRadiusPoint(null);
+      setCirclePoints([]);
+      setCurvePoints([]);
+      setArcPoints([]);
+      arcPointsRef.current = [];
+      setArcRadiusPoint(null);
+      measurePreviewRef.current = null;
+    }
+  }, [store.drawingClearCounter]);
+
   const worldToScreen = useCallback((x: number, y: number) => {
     const { x: panX, y: panY, zoom } = panRef.current;
     const canvas = canvasRef.current;
@@ -184,6 +213,51 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     };
   }, []);
 
+  const applySnap = useCallback((point: Point, polylinePoints: Point[] = [], allowSelectMode: boolean = false): { point: Point; snap: SnapResult | null } => {
+    const isDigitalMode = store.toolCategory === 'digital';
+    const isMeasureMode = store.toolCategory === 'measure';
+    
+    if (!store.snapEnabled || (!isDigitalMode && !isMeasureMode)) {
+      return { point, snap: null };
+    }
+
+    const isDrawMode = store.digitalMode === 'draw';
+    const isSelectMode = store.digitalMode === 'select' && allowSelectMode;
+    
+    if (!isDrawMode && !isSelectMode && !isMeasureMode) {
+      return { point, snap: null };
+    }
+
+    const threshold = store.snapThreshold;
+    snapThresholdRef.current = threshold;
+
+    const intersections = intersectionManagerRef.current?.getIntersectionsNear(point, threshold) ?? [];
+    const strokes = strokesRef.current;
+
+    const snapResult = findBestSnapPoint(point, {
+      strokes,
+      intersections,
+      polylinePoints,
+      threshold,
+    });
+
+    if (snapResult) {
+      currentSnapRef.current = snapResult;
+      return { point: snapResult.point, snap: snapResult };
+    }
+
+    if (currentSnapRef.current) {
+      const dx = point.x - currentSnapRef.current.point.x;
+      const dy = point.y - currentSnapRef.current.point.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > threshold) {
+        currentSnapRef.current = null;
+      }
+    }
+
+    return { point, snap: currentSnapRef.current };
+  }, [store.snapEnabled, store.snapThreshold, store.toolCategory, store.digitalMode]);
+
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
@@ -201,6 +275,239 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
     const { toolCategory, pixelsPerUnit } = store;
     drawGrid(ctx, width, height, panRef.current, toolCategory, pixelsPerUnit);
+
+    // Draw snap indicator
+    const snap = currentSnapRef.current;
+    if (snap && (store.toolCategory === 'digital' || store.toolCategory === 'measure')) {
+      const { x: panX, y: panY, zoom } = panRef.current;
+      const screenX = (snap.point.x - panX) * zoom + width / 2;
+      const screenY = height / 2 - (snap.point.y - panY) * zoom;
+
+      const snapColors: Record<string, string> = {
+        integer: '#00bcd4',
+        strokePoint: '#e91e63',
+        intersection: '#ffeb3b',
+        origin: '#4caf50',
+        polylinePoint: '#9c27b0',
+      };
+
+      const color = snapColors[snap.type] ?? '#00bcd4';
+
+      ctx.beginPath();
+      ctx.arc(screenX, screenY, 6, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(screenX, screenY, 10, 0, Math.PI * 2);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Draw measure preview
+    if (measurePreviewRef.current && store.toolCategory === 'measure' && store.measureTool === 'distance') {
+      const { startPoint, endPoint } = measurePreviewRef.current;
+      const { x: panX, y: panY, zoom } = panRef.current;
+
+      const startScreenX = (startPoint.x - panX) * zoom + width / 2;
+      const startScreenY = height / 2 - (startPoint.y - panY) * zoom;
+      const endScreenX = (endPoint.x - panX) * zoom + width / 2;
+      const endScreenY = height / 2 - (endPoint.y - panY) * zoom;
+
+      // Draw dashed line
+      ctx.beginPath();
+      ctx.moveTo(startScreenX, startScreenY);
+      ctx.lineTo(endScreenX, endScreenY);
+      ctx.strokeStyle = '#ff5722';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Draw end points
+      ctx.beginPath();
+      ctx.arc(startScreenX, startScreenY, 5, 0, Math.PI * 2);
+      ctx.fillStyle = '#ff5722';
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(endScreenX, endScreenY, 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Draw measurement label at midpoint
+      const midX = (startScreenX + endScreenX) / 2;
+      const midY = (startScreenY + endScreenY) / 2;
+
+      const distance = Math.hypot(endPoint.x - startPoint.x, endPoint.y - startPoint.y);
+      const value = pixelsToUnit(distance, store.unit, store.pixelsPerUnit);
+      const label = formatLength(value, store.unit);
+
+      drawMeasurementLabel(ctx, { x: midX, y: midY - 15 }, label, '#ff5722');
+    }
+
+    // Draw angle measurement preview (when first line is selected and hovering)
+    if (store.toolCategory === 'measure' && store.measureTool === 'angle' && store.measureFirstLine) {
+      const firstLineStroke = strokesRef.current.find(s => s.id === store.measureFirstLine!.strokeId);
+      if (firstLineStroke && firstLineStroke.digitalSegments) {
+        const firstSegment = firstLineStroke.digitalSegments[store.measureFirstLine.segmentIndex];
+        
+        // Check for either hovering or selected second line
+        const secondLineRef = store.measureSecondLine || (hoveredDigitalElement?.strokeId !== store.measureFirstLine.strokeId ? hoveredDigitalElement : null);
+        
+        if (secondLineRef) {
+          const secondLineStroke = strokesRef.current.find(s => s.id === secondLineRef.strokeId);
+          if (secondLineStroke && secondLineStroke.digitalSegments) {
+            const secondSegment = secondLineStroke.digitalSegments[secondLineRef.segmentIndex];
+            
+            // Get endpoints of both line segments
+            if (firstSegment && firstSegment.type === 'line' && firstSegment.points.length >= 2 &&
+                secondSegment && secondSegment.type === 'line' && secondSegment.points.length >= 2) {
+              
+              const p1Start = firstSegment.points[0];
+              const p1End = firstSegment.points[1];
+              const p2Start = secondSegment.points[0];
+              const p2End = secondSegment.points[1];
+              
+              // Check if lines are parallel
+              if (checkParallelLines(p1Start, p1End, p2Start, p2End)) {
+                // Lines are parallel - show nothing
+                return;
+              }
+              
+              // Find intersection point of the two infinite lines (arc center)
+              const arcCenter = findLineIntersection(p1Start, p1End, p2Start, p2End);
+              
+              // Use the current mouse position projected onto the 2nd line as the arc endpoint
+              // This keeps the angle label close to the user's cursor
+              let arcEndpointOn2ndLine: Point;
+              if (mouseWorldRef.current) {
+                // Project current mouse position onto the 2nd line segment
+                arcEndpointOn2ndLine = closestPointOnSegment(mouseWorldRef.current, p2Start, p2End);
+              } else if (store.measureEndPoint) {
+                // Fall back to stored click point if no mouse position available
+                arcEndpointOn2ndLine = store.measureEndPoint;
+              } else {
+                // Final fallback to segment endpoint
+                arcEndpointOn2ndLine = p2End;
+              }
+              
+              // Compute radius from arc center to the arc endpoint on 2nd line
+              const radius = calcDistance(arcCenter, arcEndpointOn2ndLine);
+              
+              // Find where the circle (centered at arcCenter with this radius) intersects with the first line
+              const line1Intersections = lineCircleIntersections(arcCenter, radius, p1Start, p1End);
+              
+               if (line1Intersections.length > 0) {
+                 // Choose the intersection point based on current mouse position
+                 // Use mouseWorldRef if available, otherwise fall back to arcEndpointOn2ndLine
+                 const mousePos = mouseWorldRef.current || arcEndpointOn2ndLine;
+                 const selectedIntersection = chooseIntersectionByMouseAngle(
+                   line1Intersections[0],
+                   line1Intersections.length > 1 ? line1Intersections[1] : null,
+                   arcCenter,
+                   arcEndpointOn2ndLine,
+                   mousePos
+                 );
+                
+                 // Draw the angle arc
+                 const result = drawAngleArcImproved(
+                   ctx,
+                   arcCenter,
+                   selectedIntersection,
+                   arcEndpointOn2ndLine,
+                   p1Start,
+                   p1End,
+                   p2Start,
+                   p2End,
+                   worldToScreen
+                 );
+                 
+                  // Draw angle label centered on the arc, with a small outward offset
+                  const arcPoint1Screen = worldToScreen(selectedIntersection.x, selectedIntersection.y);
+                  const arcPoint2Screen = worldToScreen(arcEndpointOn2ndLine.x, arcEndpointOn2ndLine.y);
+                  const angle1 = Math.atan2(arcPoint1Screen.y - result.arcCenter.y, arcPoint1Screen.x - result.arcCenter.x);
+                  const angle2 = Math.atan2(arcPoint2Screen.y - result.arcCenter.y, arcPoint2Screen.x - result.arcCenter.x);
+                  let angleDiff = angle2 - angle1;
+                  if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+                  if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+                  const midAngle = angle1 + angleDiff / 2;
+                  const arcRadius = Math.hypot(arcPoint1Screen.x - result.arcCenter.x, arcPoint1Screen.y - result.arcCenter.y);
+                  const labelRadius = arcRadius + 8;
+                  const labelOffsetX = result.arcCenter.x + Math.cos(midAngle) * labelRadius;
+                  const labelOffsetY = result.arcCenter.y + Math.sin(midAngle) * labelRadius;
+
+                  const labelText = formatAngle(result.angle, store.angleUnit);
+                  drawMeasurementLabel(ctx, { x: labelOffsetX, y: labelOffsetY }, labelText, '#ff9800');
+               }
+            }
+          }
+        }
+      }
+    }
+
+    // Draw radius measurement label for arc/circle
+    if (store.toolCategory === 'measure' && store.measureTool === 'radius') {
+      const radiusSelection = store.measureFirstLine
+        ? store.measureFirstLine
+        : (hoveredDigitalElement?.strokeId && hoveredDigitalElement?.segmentIndex !== undefined
+          ? { strokeId: hoveredDigitalElement.strokeId, segmentIndex: hoveredDigitalElement.segmentIndex }
+          : null);
+
+      if (radiusSelection) {
+        const radiusStroke = strokesRef.current.find(s => s.id === radiusSelection.strokeId);
+        const radiusSegment = radiusStroke?.digitalSegments?.[radiusSelection.segmentIndex];
+        if (radiusSegment && radiusSegment.type === 'arc' && radiusSegment.arcData) {
+          const sweep = radiusSegment.arcData.endAngle - radiusSegment.arcData.startAngle;
+          const fullCircle = Math.abs(sweep) >= Math.PI * 2 - 1e-3;
+          const mouseWorld = mouseWorldRef.current;
+          const baseAngle = mouseWorld
+            ? Math.atan2(mouseWorld.y - radiusSegment.arcData.center.y, mouseWorld.x - radiusSegment.arcData.center.x)
+            : radiusSegment.arcData.startAngle;
+          let targetAngle = baseAngle;
+
+          if (!fullCircle) {
+            const within = isAngleWithinArc(radiusSegment.arcData.startAngle, radiusSegment.arcData.endAngle, baseAngle);
+            if (!within) {
+              const start = radiusSegment.arcData.startAngle;
+              const end = radiusSegment.arcData.endAngle;
+              const diffToStart = Math.abs(normalizeAnglePositive(baseAngle - start));
+              const diffToEnd = Math.abs(normalizeAnglePositive(baseAngle - end));
+              targetAngle = diffToStart <= diffToEnd ? start : end;
+            }
+          }
+
+          const arcPoint = {
+            x: radiusSegment.arcData.center.x + Math.cos(targetAngle) * radiusSegment.arcData.radius,
+            y: radiusSegment.arcData.center.y + Math.sin(targetAngle) * radiusSegment.arcData.radius,
+          };
+
+          const centerScreen = worldToScreen(radiusSegment.arcData.center.x, radiusSegment.arcData.center.y);
+          const arcPointScreen = worldToScreen(arcPoint.x, arcPoint.y);
+          ctx.beginPath();
+          ctx.moveTo(centerScreen.x, centerScreen.y);
+          ctx.lineTo(arcPointScreen.x, arcPointScreen.y);
+          ctx.strokeStyle = '#ff9800';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([6, 4]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          const labelWorld = {
+            x: (radiusSegment.arcData.center.x + arcPoint.x) / 2,
+            y: (radiusSegment.arcData.center.y + arcPoint.y) / 2,
+          };
+          const labelScreen = worldToScreen(labelWorld.x, labelWorld.y);
+          const radiusValue = radiusSegment.arcData.radius / store.pixelsPerUnit;
+          drawMeasurementLabel(ctx, labelScreen, formatLength(radiusValue, store.unit), '#ff9800');
+        }
+      }
+    }
 
     if (closedAreaManagerRef.current) {
       const { x: panX, y: panY, zoom } = panRef.current;
@@ -242,29 +549,65 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
           sel => sel.strokeId === stroke.id && sel.segmentIndex === segIdx
         );
         
-        // Check if this segment's stroke is part of the hovered closed area
-        const isPartOfHoveredArea = hoveredAreaStrokeIds.includes(stroke.id);
+         // In measure mode, highlight the selected lines
+         const isMeasureFirstLine = store.toolCategory === 'measure' && 
+                                    store.measureFirstLine?.strokeId === stroke.id && 
+                                    store.measureFirstLine?.segmentIndex === segIdx;
+         
+         const isMeasureSecondLine = store.toolCategory === 'measure' && 
+                                     store.measureSecondLine?.strokeId === stroke.id && 
+                                     store.measureSecondLine?.segmentIndex === segIdx;
 
-        if (segment.type === 'line') {
-          drawDigitalLine(ctx, segment.points, segment.color, worldToScreen, isHovered || isPartOfHoveredArea, isSelected);
+          const isMeasureRadiusArc = store.toolCategory === 'measure' &&
+                                     store.measureTool === 'radius' &&
+                                     store.measureFirstLine?.strokeId === stroke.id &&
+                                     store.measureFirstLine?.segmentIndex === segIdx;
+         
+         // Only mark as selected for dashing if BOTH lines are selected (second line exists)
+         const isMeasureSelected = (isMeasureFirstLine || isMeasureSecondLine) && !!store.measureSecondLine;
+         
+         // Check if this segment's stroke is part of the hovered closed area
+         const isPartOfHoveredArea = hoveredAreaStrokeIds.includes(stroke.id);
+
+         if (segment.type === 'line') {
+           // For measure mode with first or second line selected, use special color handling
+            if ((isMeasureFirstLine || isMeasureSecondLine) && !!store.measureSecondLine) {
+              // Draw selected lines in solid orange (both first and second when both are selected)
+              const p1 = worldToScreen(segment.points[0].x, segment.points[0].y);
+              const p2 = worldToScreen(segment.points[1].x, segment.points[1].y);
+              
+              ctx.beginPath();
+              ctx.moveTo(p1.x, p1.y);
+              ctx.lineTo(p2.x, p2.y);
+              ctx.strokeStyle = '#ff9800';
+              ctx.lineWidth = 2;
+              ctx.stroke();
+            } else {
+              drawDigitalLine(ctx, segment.points, segment.color, worldToScreen, isHovered || isPartOfHoveredArea, isSelected || isMeasureSelected);
+            }
         } else if (segment.type === 'arc' && segment.arcData) {
-          drawDigitalArc(ctx, segment.arcData, segment.color, worldToScreen, panRef.current.zoom, isHovered || isPartOfHoveredArea, isSelected);
+          if (isMeasureRadiusArc) {
+            drawDigitalArc(ctx, segment.arcData, '#ff9800', worldToScreen, panRef.current.zoom, isHovered || isPartOfHoveredArea, true);
+          } else {
+            drawDigitalArc(ctx, segment.arcData, segment.color, worldToScreen, panRef.current.zoom, isHovered || isPartOfHoveredArea, isSelected || isMeasureSelected);
+          }
         } else if (segment.type === 'bezier') {
-          drawDigitalBezier(ctx, segment.points, segment.color, worldToScreen, isHovered || isPartOfHoveredArea, isSelected);
+          drawDigitalBezier(ctx, segment.points, segment.color, worldToScreen, isHovered || isPartOfHoveredArea, isSelected || isMeasureSelected);
         }
 
-        // Draw endpoint indicators if hovered, selected, or part of hovered closed area
-        if (isHovered || isSelected || isPartOfHoveredArea) {
-          segment.points.forEach((point, pointIdx) => {
-            const screen = worldToScreen(point.x, point.y);
-            const isEndpoint = segment.type !== 'bezier' || pointIdx < 2;
-            const size = isEndpoint ? 6 : 4;
+         // Draw endpoint indicators if hovered, selected, or measure lines selected
+         if (isHovered || isSelected || isMeasureFirstLine || isMeasureSecondLine || isPartOfHoveredArea) {
+           segment.points.forEach((point, pointIdx) => {
+             const screen = worldToScreen(point.x, point.y);
+             const isEndpoint = segment.type !== 'bezier' || pointIdx < 2;
+             const size = isEndpoint ? 6 : 4;
             let color = '#2196f3';
             if (isSelected) color = '#ff6b6b';
+            else if (isMeasureFirstLine || isMeasureSecondLine) color = '#ff9800';
             else if (isPartOfHoveredArea) color = '#ff9800';
             drawEndpointIndicator(ctx, screen, size, color);
-          });
-        }
+           });
+         }
       });
     });
 
@@ -370,6 +713,73 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
           ctx.setLineDash([]);
         }
       }
+
+      // Arc preview
+      if (store.digitalTool === 'arc' && arcPoints.length > 0) {
+        arcPoints.forEach((point) => {
+          const screen = worldToScreen(point.x, point.y);
+          drawEndpointIndicator(ctx, screen, 6, '#2196f3');
+        });
+
+        const previewPoint = arcRadiusPoint ?? mouseWorldRef.current;
+
+        if (arcPoints.length === 1 && previewPoint) {
+          const p1 = worldToScreen(arcPoints[0].x, arcPoints[0].y);
+          const p2 = worldToScreen(previewPoint.x, previewPoint.y);
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.strokeStyle = store.currentColor;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([6, 4]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          const distPx = calcDistance(arcPoints[0], previewPoint);
+          const distValue = distPx / store.pixelsPerUnit;
+          const midPoint = {
+            x: (arcPoints[0].x + previewPoint.x) / 2,
+            y: (arcPoints[0].y + previewPoint.y) / 2,
+          };
+          const midScreen = worldToScreen(midPoint.x, midPoint.y);
+          drawMeasurementLabel(ctx, midScreen, formatLength(distValue, store.unit), store.currentColor);
+        }
+
+        if (arcPoints.length >= 2 && previewPoint) {
+          const distPx = calcDistance(arcPoints[0], arcPoints[1]);
+          const distValue = distPx / store.pixelsPerUnit;
+          const midPoint = {
+            x: (arcPoints[0].x + arcPoints[1].x) / 2,
+            y: (arcPoints[0].y + arcPoints[1].y) / 2,
+          };
+          const midScreen = worldToScreen(midPoint.x, midPoint.y);
+          drawMeasurementLabel(ctx, midScreen, formatLength(distValue, store.unit), store.currentColor);
+
+          const arcData = computeArcDataFromThreePoints(arcPoints[0], arcPoints[1], previewPoint);
+          if (arcData) {
+            drawDigitalArcPreview(ctx, arcData, store.currentColor, worldToScreen, panRef.current.zoom);
+
+            const centerScreen = worldToScreen(arcData.center.x, arcData.center.y);
+            const previewScreen = worldToScreen(previewPoint.x, previewPoint.y);
+            ctx.beginPath();
+            ctx.moveTo(centerScreen.x, centerScreen.y);
+            ctx.lineTo(previewScreen.x, previewScreen.y);
+            ctx.strokeStyle = store.currentColor;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([6, 4]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            const radiusValue = arcData.radius / store.pixelsPerUnit;
+            const radiusMid = {
+              x: (arcData.center.x + previewPoint.x) / 2,
+              y: (arcData.center.y + previewPoint.y) / 2,
+            };
+            const radiusMidScreen = worldToScreen(radiusMid.x, radiusMid.y);
+            drawMeasurementLabel(ctx, radiusMidScreen, formatLength(radiusValue, store.unit), store.currentColor);
+          }
+        }
+      }
       
       // Curve preview
       if (store.digitalTool === 'curve' && curvePoints.length > 0) {
@@ -417,7 +827,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     if (currentStrokePoints.length > 1) {
       drawStroke(ctx, currentStrokePoints, store.currentColor, store.currentBrushSettings.size, worldToScreen, store.currentBrushSettings.opacity);
     }
-  }, [currentStrokePoints, store.currentColor, store.currentBrushSettings.size, store.currentBrushSettings.opacity, worldToScreen, store.toolCategory, store.digitalMode, store.digitalTool, store.mode, hoveredDigitalElement, selectedDigitalElements, digitalLinePoints, digitalLinePreviewEnd, circleCenter, circleRadiusPoint, circlePoints, curvePoints, store.circleCreationMode, lastMousePosRef]);
+  }, [currentStrokePoints, store.currentColor, store.currentBrushSettings.size, store.currentBrushSettings.opacity, worldToScreen, store.toolCategory, store.digitalMode, store.digitalTool, store.mode, hoveredDigitalElement, selectedDigitalElements, digitalLinePoints, digitalLinePreviewEnd, circleCenter, circleRadiusPoint, circlePoints, arcPoints, arcRadiusPoint, curvePoints, store.circleCreationMode, lastMousePosRef]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -591,7 +1001,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
   }
 
   // Digital element hit testing
-  const findDigitalElementAtPosition = useCallback((world: { x: number; y: number }): {
+  const findDigitalElementAtPosition = useCallback((world: { x: number; y: number }, mode: 'point' | 'line' | 'arc' | 'all' = 'all'): {
     strokeId: string;
     segmentIndex: number;
     pointIndex: number;
@@ -600,7 +1010,8 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     const { zoom } = panRef.current;
     const endpointThreshold = 12.0 / zoom;
     const controlThreshold = 10.0 / zoom;
-    const lineThreshold = 8.0 / zoom;
+    const lineThreshold = 15.0 / zoom;
+    const arcThreshold = 15.0 / zoom;
 
     for (let i = strokesRef.current.length - 1; i >= 0; i--) {
       const stroke = strokesRef.current[i];
@@ -609,6 +1020,58 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       for (let segIdx = 0; segIdx < stroke.digitalSegments.length; segIdx++) {
         const segment = stroke.digitalSegments[segIdx];
 
+        // In 'point' mode, only check endpoints
+        if (mode === 'point') {
+          if (segment.type === 'line' && segment.points.length >= 2) {
+            const startDist = Math.hypot(world.x - segment.points[0].x, world.y - segment.points[0].y);
+            if (startDist <= endpointThreshold) {
+              return { strokeId: stroke.id, segmentIndex: segIdx, pointIndex: 0, type: 'endpoint' };
+            }
+            const endDist = Math.hypot(world.x - segment.points[1].x, world.y - segment.points[1].y);
+            if (endDist <= endpointThreshold) {
+              return { strokeId: stroke.id, segmentIndex: segIdx, pointIndex: 1, type: 'endpoint' };
+            }
+          }
+          if (segment.type === 'arc' && segment.points.length >= 2) {
+            const startDist = Math.hypot(world.x - segment.points[0].x, world.y - segment.points[0].y);
+            if (startDist <= endpointThreshold) {
+              return { strokeId: stroke.id, segmentIndex: segIdx, pointIndex: 0, type: 'endpoint' };
+            }
+            const endDist = Math.hypot(world.x - segment.points[1].x, world.y - segment.points[1].y);
+            if (endDist <= endpointThreshold) {
+              return { strokeId: stroke.id, segmentIndex: segIdx, pointIndex: 1, type: 'endpoint' };
+            }
+          }
+          continue;
+        }
+
+        // In 'line' mode, only check line segments
+        if (mode === 'line') {
+          if (segment.type === 'line' && segment.points.length >= 2) {
+            const lineDist = distanceToSegment(world, segment.points[0], segment.points[1]);
+            if (lineDist <= lineThreshold) {
+              return { strokeId: stroke.id, segmentIndex: segIdx, pointIndex: 0, type: 'endpoint' };
+            }
+          }
+          continue;
+        }
+
+        // In 'arc' mode, only check arc/circle segments
+        if (mode === 'arc') {
+          if (segment.type === 'arc' && segment.arcData) {
+            const distToCenter = Math.hypot(world.x - segment.arcData.center.x, world.y - segment.arcData.center.y);
+            const distToArc = Math.abs(distToCenter - segment.arcData.radius);
+            if (distToArc <= arcThreshold) {
+              const angle = Math.atan2(world.y - segment.arcData.center.y, world.x - segment.arcData.center.x);
+              if (isAngleWithinArc(segment.arcData.startAngle, segment.arcData.endAngle, angle)) {
+                return { strokeId: stroke.id, segmentIndex: segIdx, pointIndex: 0, type: 'endpoint' };
+              }
+            }
+          }
+          continue;
+        }
+
+        // In 'all' mode, check both endpoints and line segments
         if (segment.type === 'line' && segment.points.length >= 2) {
           // Check endpoints first (higher priority)
           const startDist = Math.hypot(world.x - segment.points[0].x, world.y - segment.points[0].y);
@@ -636,6 +1099,17 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
           const endDist = Math.hypot(world.x - segment.points[1].x, world.y - segment.points[1].y);
           if (endDist <= endpointThreshold) {
             return { strokeId: stroke.id, segmentIndex: segIdx, pointIndex: 1, type: 'endpoint' };
+          }
+
+          if (segment.arcData) {
+            const distToCenter = Math.hypot(world.x - segment.arcData.center.x, world.y - segment.arcData.center.y);
+            const distToArc = Math.abs(distToCenter - segment.arcData.radius);
+            if (distToArc <= arcThreshold) {
+              const angle = Math.atan2(world.y - segment.arcData.center.y, world.x - segment.arcData.center.x);
+              if (isAngleWithinArc(segment.arcData.startAngle, segment.arcData.endAngle, angle)) {
+                return { strokeId: stroke.id, segmentIndex: segIdx, pointIndex: 0, type: 'endpoint' };
+              }
+            }
           }
         }
 
@@ -732,6 +1206,111 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
     if (!world) return;
 
+    // Apply snapping for digital tool drawing
+    let polylinePoints: Point[] = [];
+    if (store.toolCategory === 'digital' && store.digitalMode === 'draw') {
+      if (store.digitalTool === 'line') {
+        polylinePoints = digitalLinePoints;
+      } else if (store.digitalTool === 'circle' && store.circleCreationMode === 'threePoint') {
+        polylinePoints = circlePoints;
+      } else if (store.digitalTool === 'arc') {
+        polylinePoints = arcPoints;
+      } else if (store.digitalTool === 'curve') {
+        polylinePoints = curvePoints;
+      }
+    }
+    const { point: snappedWorld } = applySnap(world, polylinePoints);
+
+    // Handle measure tool
+    if (store.toolCategory === 'measure' && store.measureTool) {
+      const { measureTool, measureStartPoint, measureFirstLine } = store;
+
+      if (measureTool === 'distance') {
+        if (!measureStartPoint) {
+          // First click: set start point
+          store.setMeasureStartPoint(snappedWorld);
+          // Initialize preview immediately
+          measurePreviewRef.current = {
+            startPoint: snappedWorld,
+            endPoint: snappedWorld,
+          };
+        } else {
+          // Subsequent click: complete measurement and store last value
+          const dist = distance(store.measureStartPoint!, snappedWorld);
+          const value = dist / store.pixelsPerUnit;
+          store.setLastMeasureValue(`${value.toFixed(2)} ${store.unit}`);
+          
+          store.setMeasureStartPoint(snappedWorld);
+          // Reset preview
+          measurePreviewRef.current = {
+            startPoint: snappedWorld,
+            endPoint: snappedWorld,
+          };
+        }
+        } else if (measureTool === 'angle') {
+          if (!measureFirstLine) {
+            // First line selection - use store.selectMode directly to avoid stale closure
+            const hitElement = findDigitalElementAtPosition(snappedWorld, store.selectMode);
+            if (hitElement) {
+              store.setMeasureFirstLine({
+                strokeId: hitElement.strokeId,
+                segmentIndex: hitElement.segmentIndex,
+              });
+              // Store the click point for the first line
+              store.setMeasureStartPoint(snappedWorld);
+            }
+          } else {
+            // Second line click: finalize angle and immediately chain to new first line
+            const hitElement = findDigitalElementAtPosition(snappedWorld, store.selectMode);
+            if (hitElement) {
+              const firstStroke = strokesRef.current.find(s => s.id === measureFirstLine.strokeId);
+              const secondStroke = strokesRef.current.find(s => s.id === hitElement.strokeId);
+              const firstSegment = firstStroke?.digitalSegments?.[measureFirstLine.segmentIndex];
+              const secondSegment = secondStroke?.digitalSegments?.[hitElement.segmentIndex];
+
+              if (firstSegment && secondSegment && firstSegment.type === 'line' && secondSegment.type === 'line') {
+                const p1Start = firstSegment.points[0];
+                const p1End = firstSegment.points[1];
+                const p2Start = secondSegment.points[0];
+                const p2End = secondSegment.points[1];
+
+                if (!checkParallelLines(p1Start, p1End, p2Start, p2End)) {
+                  const arcCenter = findLineIntersection(p1Start, p1End, p2Start, p2End);
+                  const p1Ref = calcDistance(arcCenter, p1Start) >= calcDistance(arcCenter, p1End) ? p1Start : p1End;
+                  const p2Ref = calcDistance(arcCenter, p2Start) >= calcDistance(arcCenter, p2End) ? p2Start : p2End;
+                  const angle = angleBetween(p1Ref, arcCenter, p2Ref);
+                  store.setLastMeasureValue(formatAngle(angle, store.angleUnit));
+                }
+              }
+
+              store.setMeasureFirstLine({
+                strokeId: hitElement.strokeId,
+                segmentIndex: hitElement.segmentIndex,
+              });
+              store.setMeasureStartPoint(snappedWorld);
+              store.setMeasureSecondLine(null);
+              store.setMeasureEndPoint(null);
+            }
+          }
+        } else if (measureTool === 'radius') {
+        // Radius uses arc/circle selection
+        const hitElement = findDigitalElementAtPosition(snappedWorld, 'arc');
+        if (hitElement) {
+          const stroke = strokesRef.current.find(s => s.id === hitElement.strokeId);
+          const segment = stroke?.digitalSegments?.[hitElement.segmentIndex];
+          if (segment?.type === 'arc' && segment.arcData) {
+            const radiusValue = segment.arcData.radius / store.pixelsPerUnit;
+            store.setLastMeasureValue(formatLength(radiusValue, store.unit));
+            store.setMeasureFirstLine({
+              strokeId: hitElement.strokeId,
+              segmentIndex: hitElement.segmentIndex,
+            });
+          }
+        }
+        }
+      return;
+    }
+
     // Handle digital tool drawing
     if (store.toolCategory === 'digital' && store.digitalMode === 'draw') {
       const { digitalTool } = store;
@@ -742,7 +1321,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         // Check if clicking near start point to close the polyline
         if (digitalLinePoints.length >= 2) {
           const startPoint = digitalLinePoints[0];
-          if (distance(world, startPoint) <= clickThreshold) {
+          if (distance(snappedWorld, startPoint) <= clickThreshold) {
             // Close the polyline - create separate strokes for each segment including closing segment
             for (let i = 0; i < digitalLinePoints.length - 1; i++) {
               const segmentPoints = [digitalLinePoints[i], digitalLinePoints[i + 1]];
@@ -787,39 +1366,40 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
             
             setDigitalLinePoints([]);
             setDigitalLinePreviewEnd(null);
+            currentSnapRef.current = null;
             return;
           }
         }
         
         // Add new point
-        setDigitalLinePoints(prev => [...prev, world]);
+        setDigitalLinePoints(prev => [...prev, snappedWorld]);
         return;
       }
       
       if (digitalTool === 'circle') {
         if (store.circleCreationMode === 'centerRadius') {
           if (!circleCenter) {
-            setCircleCenter(world);
+            setCircleCenter(snappedWorld);
           } else {
             // Complete circle
-            const radius = distance(circleCenter, world);
+            const radius = distance(circleCenter, snappedWorld);
             const segments: DigitalSegment[] = [{
               id: generateId(),
               type: 'arc',
-              points: [circleCenter, world],
+              points: [circleCenter, snappedWorld],
               color: store.currentColor,
               arcData: {
                 center: circleCenter,
                 radius,
-                startAngle: Math.atan2(world.y - circleCenter.y, world.x - circleCenter.x),
-                endAngle: Math.atan2(world.y - circleCenter.y, world.x - circleCenter.x) + Math.PI * 2,
+                startAngle: Math.atan2(snappedWorld.y - circleCenter.y, snappedWorld.x - circleCenter.x),
+                endAngle: Math.atan2(snappedWorld.y - circleCenter.y, snappedWorld.x - circleCenter.x) + Math.PI * 2,
               },
             }];
             
             const stroke: Stroke = {
               id: generateId(),
-              points: [circleCenter, world],
-              smoothedPoints: [circleCenter, world],
+              points: [circleCenter, snappedWorld],
+              smoothedPoints: [circleCenter, snappedWorld],
               color: store.currentColor,
               thickness: 1,
               timestamp: Date.now(),
@@ -831,17 +1411,18 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
             store.addStroke(stroke);
             setCircleCenter(null);
             setCircleRadiusPoint(null);
+            currentSnapRef.current = null;
           }
           return;
         } else {
           // Three-point circle mode
-          setCirclePoints(prev => [...prev, world]);
+          setCirclePoints(prev => [...prev, snappedWorld]);
           
           if (circlePoints.length >= 2) {
             // Calculate circle from 3 points
             const p1 = circlePoints[0];
             const p2 = circlePoints[1];
-            const p3 = world;
+            const p3 = snappedWorld;
             
             // Use perpendicular bisectors intersection
             const D = 2 * (p1.x * (p2.y - p3.y) + p2.x * (p3.y - p1.y) + p3.x * (p1.y - p2.y));
@@ -890,12 +1471,61 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         }
         return;
       }
+
+      if (digitalTool === 'arc') {
+        const currentArcPoints = arcPointsRef.current;
+        if (currentArcPoints.length === 0) {
+          const nextPoints = [snappedWorld];
+          arcPointsRef.current = nextPoints;
+          setArcPoints(nextPoints);
+          return;
+        }
+
+        if (currentArcPoints.length === 1) {
+          const nextPoints = [currentArcPoints[0], snappedWorld];
+          arcPointsRef.current = nextPoints;
+          setArcPoints(nextPoints);
+          return;
+        }
+
+        if (currentArcPoints.length >= 2) {
+          const arcData = computeArcDataFromThreePoints(currentArcPoints[0], currentArcPoints[1], snappedWorld);
+          if (arcData) {
+            const segment: DigitalSegment = {
+              id: generateId(),
+              type: 'arc',
+              points: [currentArcPoints[0], currentArcPoints[1]],
+              color: store.currentColor,
+              arcData,
+            };
+
+            const stroke: Stroke = {
+              id: generateId(),
+              points: [currentArcPoints[0], currentArcPoints[1]],
+              smoothedPoints: [currentArcPoints[0], currentArcPoints[1]],
+              color: store.currentColor,
+              thickness: 1,
+              timestamp: Date.now(),
+              strokeType: 'digital',
+              digitalSegments: [segment],
+              isClosed: false,
+            };
+
+            store.addStroke(stroke);
+            arcPointsRef.current = [];
+            setArcPoints([]);
+            setArcRadiusPoint(null);
+            currentSnapRef.current = null;
+          }
+          return;
+        }
+      }
       
       if (digitalTool === 'curve') {
         // Bezier curve: click for p0, p1(control), p2(control), then move to p3
         // Use functional update to get the latest state
         setCurvePoints(prev => {
-          const newPoints = [...prev, world];
+          const newPoints = [...prev, snappedWorld];
           
           // If we have 3 points + current mouse position = 4 points for bezier
           if (newPoints.length >= 4) {
@@ -936,7 +1566,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
           const p0 = curvePoints[0];
           
           const clickThreshold = 10 / panRef.current.zoom;
-          if (distance(world, p0) <= clickThreshold) {
+          if (distance(snappedWorld, p0) <= clickThreshold) {
             // Close the bezier curve - need at least 3 points + current = 4
             if (curvePoints.length >= 3) {
               const p1 = curvePoints[1];
@@ -963,6 +1593,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
               
               store.addStroke(stroke);
               setCurvePoints([]);
+              currentSnapRef.current = null;
             }
             return;
           }
@@ -1174,7 +1805,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       setIsDrawing(true);
       setCurrentStrokePoints([{ ...world, timestamp }]);
     }
-  }, [store, screenToWorld, findStrokeAtPosition, findAllDigitalElementsAtPosition, digitalLinePoints, circleCenter, circlePoints, curvePoints, selectedDigitalElements]);
+  }, [store, store.selectMode, screenToWorld, findStrokeAtPosition, findAllDigitalElementsAtPosition, digitalLinePoints, circleCenter, circlePoints, arcPoints, curvePoints, selectedDigitalElements]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const canvas = canvasRef.current;
@@ -1185,33 +1816,72 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     const screenY = e.clientY - rect.top;
     const world = screenToWorld(screenX, screenY);
 
-    // Track mouse position for intersection highlighting
+    // Track mouse position for intersection highlighting and angle measurement
     if (world) {
       lastMousePosRef.current = world;
+      mouseWorldRef.current = world;
     }
+
+    // Apply snapping for digital tool previews
+    let polylinePoints: Point[] = [];
+    if (store.toolCategory === 'digital' && store.digitalMode === 'draw') {
+      if (store.digitalTool === 'line') {
+        polylinePoints = digitalLinePoints;
+      } else if (store.digitalTool === 'circle' && store.circleCreationMode === 'threePoint') {
+        polylinePoints = circlePoints;
+      } else if (store.digitalTool === 'arc') {
+        polylinePoints = arcPoints;
+      } else if (store.digitalTool === 'curve') {
+        polylinePoints = curvePoints;
+      }
+    }
+    const { point: snappedWorld } = applySnap(world, polylinePoints);
 
     // Handle digital tool previews
     if (store.toolCategory === 'digital' && store.digitalMode === 'draw' && world) {
       if (store.digitalTool === 'line' && digitalLinePoints.length > 0) {
-        setDigitalLinePreviewEnd(world);
+        setDigitalLinePreviewEnd(snappedWorld);
       }
       if (store.digitalTool === 'circle' && store.circleCreationMode === 'centerRadius' && circleCenter) {
-        setCircleRadiusPoint(world);
+        setCircleRadiusPoint(snappedWorld);
       }
+      if (store.digitalTool === 'arc' && arcPoints.length >= 1) {
+        setArcRadiusPoint(snappedWorld);
+      }
+    }
+
+    // Handle measure mode preview (only for Distance tool)
+    if (store.toolCategory === 'measure' && store.measureTool === 'distance' && store.measureStartPoint) {
+      measurePreviewRef.current = {
+        startPoint: store.measureStartPoint,
+        endPoint: snappedWorld,
+      };
+      store.setMeasureEndPoint(snappedWorld);
     }
 
     // Handle digital hover and drag in both digital and artistic select mode
     const isInSelectMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') || 
                            (store.toolCategory === 'artistic' && store.mode === 'select');
-    if (isInSelectMode && world) {
-      // Update hover state
-      const hoverElement = findDigitalElementAtPosition(world);
-      setHoveredDigitalElement(hoverElement);
+    const isInMeasureMode = store.toolCategory === 'measure';
+    const isDigitalSelectMode = store.toolCategory === 'digital' && store.digitalMode === 'select';
+    
+    if ((isInSelectMode || isInMeasureMode) && world) {
+      // Apply snapping for digital select mode dragging
+      const { point: snappedWorld } = applySnap(world, [], isDigitalSelectMode);
+
+      // Update hover state only when NOT dragging (fixes hover moving with drag)
+      if (!isDraggingDigital) {
+        // In measure mode, use the current selectMode for hover detection
+        const hoverElement = isInMeasureMode 
+          ? findDigitalElementAtPosition(snappedWorld, store.selectMode)
+          : findDigitalElementAtPosition(snappedWorld);
+        setHoveredDigitalElement(hoverElement);
+      }
 
       // Handle intersection dragging - split lines and move
       if (isDraggingDigital && selectedIntersection && digitalDragStart) {
-        const dx = world.x - digitalDragStart.x;
-        const dy = world.y - digitalDragStart.y;
+        const dx = snappedWorld.x - digitalDragStart.x;
+        const dy = snappedWorld.y - digitalDragStart.y;
         
         // Track all segment IDs that were moved
         const movedSegmentIds: string[] = [];
@@ -1257,15 +1927,15 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         ...prev,
         point: { x: prev.point.x + dx, y: prev.point.y + dy },
       } : null);
-       
-      setDigitalDragStart(world);
+        
+      setDigitalDragStart(snappedWorld);
       return;
     }
 
     // Handle regular point dragging (only if no intersection selected)
       if (isDraggingDigital && digitalDragStart && selectedDigitalElements.length > 0 && !selectedIntersection) {
-        const dx = world.x - digitalDragStart.x;
-        const dy = world.y - digitalDragStart.y;
+        const dx = snappedWorld.x - digitalDragStart.x;
+        const dy = snappedWorld.y - digitalDragStart.y;
 
         // Get the original position from the first selected element
         const firstSel = selectedDigitalElements[0];
@@ -1273,7 +1943,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         const originalPos = firstStroke?.digitalSegments?.[firstSel.segmentIndex]?.points[firstSel.pointIndex];
         
         if (!originalPos) {
-          setDigitalDragStart(world);
+          setDigitalDragStart(snappedWorld);
           return;
         }
 
@@ -1357,7 +2027,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         // - closedAreaManagerRef.current.setStrokes()
         // - intersection recalculation
 
-        setDigitalDragStart(world);
+        setDigitalDragStart(snappedWorld);
         return;
       }
     }
@@ -1429,7 +2099,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     if (distance(lastPoint, world) > 0.1) {
       setCurrentStrokePoints((prev) => [...prev, { ...world, timestamp: Date.now() }]);
     }
-  }, [isPanning, isDragging, isDraggingArea, isDrawing, panStart, store, screenToWorld, currentStrokePoints, dragStart, lastDragPoint, draggedStrokeIds, selectedDigitalElements, digitalLinePoints, circleCenter, digitalDragStart, isDraggingDigital, findDigitalElementAtPosition]);
+  }, [isPanning, isDragging, isDraggingArea, isDrawing, panStart, store, screenToWorld, currentStrokePoints, dragStart, lastDragPoint, draggedStrokeIds, selectedDigitalElements, digitalLinePoints, circleCenter, circlePoints, arcPoints, curvePoints, digitalDragStart, isDraggingDigital, findDigitalElementAtPosition]);
 
   const handleMouseUp = useCallback(() => {
     if (isPanning) {
@@ -1628,6 +2298,13 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
           setDigitalLinePreviewEnd(null);
           return;
         }
+
+        // Handle arc mode cancel
+        if (store.toolCategory === 'digital' && store.digitalMode === 'draw' && store.digitalTool === 'arc' && arcPoints.length > 0) {
+          setArcPoints([]);
+          setArcRadiusPoint(null);
+          return;
+        }
         
         // Handle curve mode close
         if (store.toolCategory === 'digital' && store.digitalMode === 'draw' && store.digitalTool === 'curve' && curvePoints.length >= 3) {
@@ -1656,6 +2333,13 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
           
           store.addStroke(stroke);
           setCurvePoints([]);
+          return;
+        }
+
+        // Handle measure mode - right-click to clear current measurement
+        if (store.toolCategory === 'measure') {
+          store.clearCurrentMeasurement();
+          measurePreviewRef.current = null;
           return;
         }
       }}
@@ -1742,7 +2426,7 @@ function drawGrid(
   toolCategory: string,
   pixelsPerUnit: number
 ): void {
-  if (toolCategory !== 'digital') {
+  if (toolCategory !== 'digital' && toolCategory !== 'measure') {
     return;
   }
 
@@ -1950,9 +2634,15 @@ function drawDigitalArc(
 ): void {
   const center = worldToScreen(arcData.center.x, arcData.center.y);
   const radius = arcData.radius * zoom;
+  const startAngleScreen = -arcData.startAngle;
+  const endAngleScreen = -arcData.endAngle;
+  const sweep = endAngleScreen - startAngleScreen;
+  const fullCircle = Math.abs(sweep) >= Math.PI * 2 - 1e-3;
+  const anticlockwise = sweep < 0;
+  const endAngle = fullCircle ? startAngleScreen + Math.PI * 2 : endAngleScreen;
   
   ctx.beginPath();
-  ctx.arc(center.x, center.y, radius, arcData.startAngle, arcData.endAngle);
+  ctx.arc(center.x, center.y, radius, startAngleScreen, endAngle, anticlockwise);
   ctx.strokeStyle = color;
   ctx.lineWidth = isHovered || isSelected ? 2 : 1;
   
@@ -1968,6 +2658,91 @@ function drawDigitalArc(
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.shadowBlur = 0;
+}
+
+function drawDigitalArcPreview(
+  ctx: CanvasRenderingContext2D,
+  arcData: { center: Point; radius: number; startAngle: number; endAngle: number },
+  color: string,
+  worldToScreen: (x: number, y: number) => { x: number; y: number },
+  zoom: number
+): void {
+  const center = worldToScreen(arcData.center.x, arcData.center.y);
+  const radius = arcData.radius * zoom;
+  const startAngleScreen = -arcData.startAngle;
+  const endAngleScreen = -arcData.endAngle;
+  const sweep = endAngleScreen - startAngleScreen;
+  const fullCircle = Math.abs(sweep) >= Math.PI * 2 - 1e-3;
+  const anticlockwise = sweep < 0;
+  const endAngle = fullCircle ? startAngleScreen + Math.PI * 2 : endAngleScreen;
+
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.arc(center.x, center.y, radius, startAngleScreen, endAngle, anticlockwise);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function normalizeAnglePositive(angle: number): number {
+  const twoPi = Math.PI * 2;
+  let normalized = angle % twoPi;
+  if (normalized < 0) normalized += twoPi;
+  return normalized;
+}
+
+function isAngleWithinArc(startAngle: number, endAngle: number, testAngle: number): boolean {
+  const twoPi = Math.PI * 2;
+  const sweep = endAngle - startAngle;
+  if (Math.abs(sweep) >= twoPi - 1e-3) return true;
+
+  const start = normalizeAnglePositive(startAngle);
+  const end = normalizeAnglePositive(endAngle);
+  const test = normalizeAnglePositive(testAngle);
+  const anticlockwise = sweep < 0;
+
+  if (!anticlockwise) {
+    if (end >= start) return test >= start && test <= end;
+    return test >= start || test <= end;
+  }
+
+  if (start >= end) return test <= start && test >= end;
+  return test <= start || test >= end;
+}
+
+function computeArcDataFromThreePoints(start: Point, end: Point, mid: Point): {
+  center: Point;
+  radius: number;
+  startAngle: number;
+  endAngle: number;
+} | null {
+  const D = 2 * (start.x * (end.y - mid.y) + end.x * (mid.y - start.y) + mid.x * (start.y - end.y));
+  if (Math.abs(D) < 1e-6) return null;
+
+  const startSq = start.x * start.x + start.y * start.y;
+  const endSq = end.x * end.x + end.y * end.y;
+  const midSq = mid.x * mid.x + mid.y * mid.y;
+
+  const centerX = (startSq * (end.y - mid.y) + endSq * (mid.y - start.y) + midSq * (start.y - end.y)) / D;
+  const centerY = (startSq * (mid.x - end.x) + endSq * (start.x - mid.x) + midSq * (end.x - start.x)) / D;
+  const center = { x: centerX, y: centerY };
+  const radius = Math.hypot(center.x - start.x, center.y - start.y);
+
+  const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
+  const endAngleRaw = Math.atan2(end.y - center.y, end.x - center.x);
+  const midAngle = Math.atan2(mid.y - center.y, mid.x - center.x);
+
+  const sweepCW = normalizeAnglePositive(endAngleRaw - startAngle);
+  const midSweep = normalizeAnglePositive(midAngle - startAngle);
+
+  let endAngle = startAngle + sweepCW;
+  if (midSweep > sweepCW) {
+    const sweepCCW = sweepCW - Math.PI * 2;
+    endAngle = startAngle + sweepCCW;
+  }
+
+  return { center, radius, startAngle, endAngle };
 }
 
 function drawDigitalCirclePreview(
@@ -2180,4 +2955,115 @@ function drawAngleArc(
   drawMeasurementLabel(ctx, { x: labelX, y: labelY }, formatAngle(acuteAngle, 'degree'), '#ff9800');
 
   return { angle: acuteAngle, arcCenter: vertexScreen };
+}
+
+/**
+ * Draw angle arc with proper circle-line intersection geometry.
+ * @param arcCenter - The center of the arc (intersection of infinite lines)
+ * @param arcPoint1 - First point on the arc (on line 1, from circle-line intersection)
+ * @param arcPoint2 - Second point on the arc (clicked point on line 2)
+ * @param line1Start - Start of first line segment
+ * @param line1End - End of first line segment
+ * @param line2Start - Start of second line segment
+ * @param line2End - End of second line segment
+ */
+function drawAngleArcImproved(
+  ctx: CanvasRenderingContext2D,
+  arcCenter: Point,
+  arcPoint1: Point,
+  arcPoint2: Point,
+  line1Start: Point,
+  line1End: Point,
+  line2Start: Point,
+  line2End: Point,
+  worldToScreen: (x: number, y: number) => { x: number; y: number }
+): { angle: number; arcCenter: { x: number; y: number } } {
+  const arcCenterScreen = worldToScreen(arcCenter.x, arcCenter.y);
+  const arcPoint1Screen = worldToScreen(arcPoint1.x, arcPoint1.y);
+  const arcPoint2Screen = worldToScreen(arcPoint2.x, arcPoint2.y);
+
+  // Arc radius is distance from center to either arc point
+  const arcRadius = Math.sqrt(
+    (arcPoint1Screen.x - arcCenterScreen.x) ** 2 + (arcPoint1Screen.y - arcCenterScreen.y) ** 2
+  );
+
+  // Compute start and end angles
+  const angle1 = Math.atan2(arcPoint1Screen.y - arcCenterScreen.y, arcPoint1Screen.x - arcCenterScreen.x);
+  const angle2 = Math.atan2(arcPoint2Screen.y - arcCenterScreen.y, arcPoint2Screen.x - arcCenterScreen.x);
+
+  let angleDiff = angle2 - angle1;
+  if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+  if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+
+  // Draw the arc
+  ctx.beginPath();
+  ctx.arc(arcCenterScreen.x, arcCenterScreen.y, arcRadius, angle1, angle2, angleDiff < 0);
+  ctx.strokeStyle = '#ff9800';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Check if arc endpoints are outside their segments and draw dashed extensions if needed
+  const isArcPoint1OnSegment = isPointOnSegmentBounds(arcPoint1, line1Start, line1End);
+  const isArcPoint2OnSegment = isPointOnSegmentBounds(arcPoint2, line2Start, line2End);
+
+  // Draw dashed extension from arc endpoint to segment if outside bounds
+  if (!isArcPoint1OnSegment) {
+    drawDashedLineFromPoint(ctx, arcPoint1Screen, arcRadius, line1Start, line1End, worldToScreen);
+  }
+  if (!isArcPoint2OnSegment) {
+    drawDashedLineFromPoint(ctx, arcPoint2Screen, arcRadius, line2Start, line2End, worldToScreen);
+  }
+
+  // Compute angle value using world coordinates (not screen)
+  const angle = angleBetween(arcPoint1, arcCenter, arcPoint2);
+
+  return { angle, arcCenter: arcCenterScreen };
+}
+
+/**
+ * Check if a point is within the bounds of a segment (not extended on infinite line).
+ */
+function isPointOnSegmentBounds(point: Point, segStart: Point, segEnd: Point, tolerance: number = 1e-6): boolean {
+  const dx = segEnd.x - segStart.x;
+  const dy = segEnd.y - segStart.y;
+  const segLenSq = dx * dx + dy * dy;
+
+  if (segLenSq < tolerance) return false;
+
+  const t = ((point.x - segStart.x) * dx + (point.y - segStart.y) * dy) / segLenSq;
+  return t >= -tolerance && t <= 1 + tolerance;
+}
+
+/**
+ * Draw a dashed line from a point extending along a circle arc.
+ */
+function drawDashedLineFromPoint(
+  ctx: CanvasRenderingContext2D,
+  pointScreen: { x: number; y: number },
+  radius: number,
+  lineStart: Point,
+  lineEnd: Point,
+  worldToScreen: (x: number, y: number) => { x: number; y: number }
+): void {
+  // Extend along the line direction
+  const lineDir = { x: lineEnd.x - lineStart.x, y: lineEnd.y - lineStart.y };
+  const lineDirLen = Math.sqrt(lineDir.x * lineDir.x + lineDir.y * lineDir.y);
+  const lineDirNorm = { x: lineDir.x / lineDirLen, y: lineDir.y / lineDirLen };
+
+  // Find where the ray from center through current arc point intersects the line
+  // (at distance 2*radius along the direction)
+  const extendedPoint = {
+    x: lineStart.x + lineDirNorm.x * radius * 2,
+    y: lineStart.y + lineDirNorm.y * radius * 2,
+  };
+  const extendedPointScreen = worldToScreen(extendedPoint.x, extendedPoint.y);
+
+  ctx.setLineDash([5, 5]);
+  ctx.beginPath();
+  ctx.moveTo(pointScreen.x, pointScreen.y);
+  ctx.lineTo(extendedPointScreen.x, extendedPointScreen.y);
+  ctx.strokeStyle = '#ff9800';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.setLineDash([]);
 }

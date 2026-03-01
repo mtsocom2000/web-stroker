@@ -1,6 +1,7 @@
-export type ToolCategory = 'artistic' | 'digital';
+export type ToolCategory = 'artistic' | 'digital' | 'measure';
 export type ArtisticTool = 'pencil' | 'pen' | 'brush' | 'ballpen' | 'eraser';
-export type DigitalTool = 'line' | 'circle' | 'curve';
+export type DigitalTool = 'line' | 'circle' | 'arc' | 'curve';
+export type MeasureTool = 'distance' | 'angle' | 'radius';
 export type StrokeType = 'artistic' | 'digital';
 
 export type LengthUnit = 'mm' | 'cm' | 'inch' | 'px';

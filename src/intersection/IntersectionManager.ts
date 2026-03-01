@@ -231,6 +231,78 @@ export class IntersectionManager {
     return null;
   }
 
+  private computeSegmentIntersection(
+    p1: Point,
+    p2: Point,
+    p3: Point,
+    p4: Point
+  ): Point | null {
+    const dx1 = p2.x - p1.x;
+    const dy1 = p2.y - p1.y;
+    const dx2 = p4.x - p3.x;
+    const dy2 = p4.y - p3.y;
+
+    const cross = dx1 * dy2 - dy1 * dx2;
+    if (Math.abs(cross) < 1e-10) return null;
+
+    const t = ((p3.x - p1.x) * dy2 - (p3.y - p1.y) * dx2) / cross;
+    const u = ((p3.x - p1.x) * dy1 - (p3.y - p1.y) * dx1) / cross;
+
+    if (t > 0.001 && t < 0.999 && u > 0.001 && u < 0.999) {
+      return {
+        x: p1.x + t * dx1,
+        y: p1.y + t * dy1,
+      };
+    }
+
+    return null;
+  }
+
+  getIntersectionsNear(point: Point, threshold: number): IntersectionPoint[] {
+    const bbox = {
+      minX: point.x - threshold,
+      minY: point.y - threshold,
+      maxX: point.x + threshold,
+      maxY: point.y + threshold,
+    };
+
+    const candidates = this.spatialIndex.search(bbox);
+    const intersections: IntersectionPoint[] = [];
+    const processedPairs = new Set<string>();
+
+    for (let i = 0; i < candidates.length; i++) {
+      const segA = candidates[i];
+      const pointsA = this.segmentPointsGetter(segA.id);
+      if (!pointsA) continue;
+
+      for (let j = i + 1; j < candidates.length; j++) {
+        const segB = candidates[j];
+        const pairKey = [segA.id, segB.id].sort().join('-');
+        if (processedPairs.has(pairKey)) continue;
+        processedPairs.add(pairKey);
+
+        const pointsB = this.segmentPointsGetter(segB.id);
+        if (!pointsB) continue;
+
+        const intersection = this.computeSegmentIntersection(pointsA[0], pointsA[1], pointsB[0], pointsB[1]);
+        if (!intersection) continue;
+
+        const dist = Math.hypot(intersection.x - point.x, intersection.y - point.y);
+        if (dist > threshold) continue;
+
+        intersections.push({
+          point: intersection,
+          segments: [
+            { strokeId: segA.strokeId, segmentIndex: segA.segmentIndex },
+            { strokeId: segB.strokeId, segmentIndex: segB.segmentIndex },
+          ],
+        });
+      }
+    }
+
+    return intersections;
+  }
+
   rebuildAll(strokes: Stroke[]): void {
     this.buildFromStrokes(strokes);
   }
@@ -245,6 +317,35 @@ export class IntersectionManager {
 
   isDirty(segmentId: string): boolean {
     return this.dirtySegments.has(segmentId);
+  }
+
+  getAllIntersectionPoints(): IntersectionPoint[] {
+    const allIntersections: IntersectionPoint[] = [];
+    const processedPairs = new Set<string>();
+
+    for (const [id, segment] of this.segmentMap) {
+      for (const otherId of segment.cachedIntersections) {
+        const pairKey = [id, otherId].sort().join('-');
+        if (processedPairs.has(pairKey)) continue;
+        processedPairs.add(pairKey);
+
+        const segPoints = this.segmentPointsGetter(id);
+        const otherPoints = this.segmentPointsGetter(otherId);
+        if (!segPoints || !otherPoints) continue;
+
+        const point = this.computeIntersectionPoint(segPoints[0], segPoints[1], otherPoints[0], otherPoints[1]);
+        if (point) {
+          allIntersections.push({
+            point,
+            segments: [
+              { strokeId: segment.strokeId, segmentIndex: segment.segmentIndex },
+            ],
+          });
+        }
+      }
+    }
+
+    return allIntersections;
   }
 }
 

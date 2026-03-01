@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Stroke, CanvasState, DigitalSegment, ToolCategory, ArtisticTool, DigitalTool, Point, LengthUnit, AngleUnit } from './types';
+import type { Stroke, CanvasState, DigitalSegment, ToolCategory, ArtisticTool, DigitalTool, MeasureTool, Point, LengthUnit, AngleUnit } from './types';
 import type { BrushType, BrushSettings } from './brush/presets';
 import type { FillRegion } from './fillRegion';
 
@@ -13,6 +13,7 @@ const DEFAULT_PIXELS_PER_UNIT: Record<LengthUnit, number> = {
 type DrawingMode = 'select' | 'draw';
 
 type DigitalMode = 'select' | 'draw';
+
 type CircleCreationMode = 'centerRadius' | 'threePoint';
 
 interface DigitalElement {
@@ -51,6 +52,26 @@ interface DrawingState {
   // Circle creation mode
   circleCreationMode: CircleCreationMode;
   setCircleCreationMode: (mode: CircleCreationMode) => void;
+
+  // Measure Tool
+  measureTool: MeasureTool | null;
+  measureStartPoint: Point | null;
+  measureEndPoint: Point | null;
+  measureFirstLine: { strokeId: string; segmentIndex: number } | null;
+  measureSecondLine: { strokeId: string; segmentIndex: number } | null;
+  selectMode: 'point' | 'line' | 'arc';
+  lastMeasureValue: string;
+  setMeasureTool: (tool: MeasureTool | null) => void;
+  setMeasureStartPoint: (point: Point | null) => void;
+  setMeasureEndPoint: (point: Point | null) => void;
+  setMeasureFirstLine: (line: { strokeId: string; segmentIndex: number } | null) => void;
+  setMeasureSecondLine: (line: { strokeId: string; segmentIndex: number } | null) => void;
+  setSelectMode: (mode: 'point' | 'line' | 'arc') => void;
+  setLastMeasureValue: (value: string) => void;
+  clearMeasure: () => void;
+  clearCurrentMeasurement: () => void;
+  drawingClearCounter: number;
+  incrementClearCounter: () => void;
 
   // Mode (for backward compatibility - select/draw)
   mode: DrawingMode;
@@ -115,6 +136,12 @@ interface DrawingState {
   smoothEnabled: boolean;
   setSmoothEnabled: (enabled: boolean) => void;
 
+  // Snap (digital mode snapping)
+  snapEnabled: boolean;
+  snapThreshold: number;
+  setSnapEnabled: (enabled: boolean) => void;
+  setSnapThreshold: (threshold: number) => void;
+
   // New Brush System
   currentBrushType: BrushType;
   currentBrushSettings: BrushSettings;
@@ -155,7 +182,7 @@ export const useDrawingStore = create<DrawingState>((set) => {
 
   return {
     // Tool Category
-    toolCategory: 'artistic',
+    toolCategory: 'digital',
     setToolCategory: (category) => set({ toolCategory: category }),
 
     // Unit System
@@ -182,6 +209,35 @@ export const useDrawingStore = create<DrawingState>((set) => {
     circleCreationMode: 'centerRadius',
     setCircleCreationMode: (mode) => set({ circleCreationMode: mode }),
 
+    // Measure Tool
+    measureTool: null,
+    measureStartPoint: null,
+    measureEndPoint: null,
+    measureFirstLine: null,
+    measureSecondLine: null,
+    selectMode: 'point',
+    lastMeasureValue: '--',
+    setMeasureTool: (tool) => set({ measureTool: tool }),
+    setMeasureStartPoint: (point) => set({ measureStartPoint: point }),
+    setMeasureEndPoint: (point) => set({ measureEndPoint: point }),
+    setMeasureFirstLine: (line) => set({ measureFirstLine: line }),
+    setMeasureSecondLine: (line) => set({ measureSecondLine: line }),
+    setSelectMode: (mode) => {
+      set({ selectMode: mode });
+    },
+    setLastMeasureValue: (value) => set({ lastMeasureValue: value }),
+    clearMeasure: () => set((state) => ({
+      measureTool: state.measureTool,
+      measureStartPoint: null,
+      measureEndPoint: null,
+      measureFirstLine: null,
+      measureSecondLine: null,
+      lastMeasureValue: '--',
+    })),
+    clearCurrentMeasurement: () => set({ measureStartPoint: null, measureEndPoint: null, measureFirstLine: null, measureSecondLine: null, lastMeasureValue: '--' }),
+    drawingClearCounter: 0,
+    incrementClearCounter: () => set((state) => ({ drawingClearCounter: state.drawingClearCounter + 1 })),
+
     // Mode (backward compatibility)
     mode: 'select',
     
@@ -207,6 +263,8 @@ export const useDrawingStore = create<DrawingState>((set) => {
     currentThickness: 2,
     predictEnabled: false,
     smoothEnabled: true,
+    snapEnabled: true,
+    snapThreshold: 10,
     selectedStrokeIds: [],
     history: [initialCanvasState],
     historyIndex: 0,
@@ -401,6 +459,8 @@ export const useDrawingStore = create<DrawingState>((set) => {
 
     setPredictEnabled: (enabled) => set({ predictEnabled: enabled }),
     setSmoothEnabled: (enabled) => set({ smoothEnabled: enabled }),
+    setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
+    setSnapThreshold: (threshold) => set({ snapThreshold: threshold }),
 
     // New Brush System
     setBrushType: (type) => {

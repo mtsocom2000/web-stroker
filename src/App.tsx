@@ -29,8 +29,15 @@ function App() {
         store.setMode('select');
       } else if (e.key === 'd' || e.key === 'D') {
         store.setMode('draw');
+      } else if (e.key === 'm' || e.key === 'M') {
+        store.setToolCategory('measure');
       } else if (e.key === 'Escape') {
         store.clearSelection();
+        if (store.toolCategory === 'measure') {
+          store.clearCurrentMeasurement();
+        } else if (store.toolCategory === 'digital' && store.digitalMode === 'draw') {
+          store.incrementClearCounter();
+        }
       }
     };
 

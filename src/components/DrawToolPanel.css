@@ -246,3 +246,111 @@
   border-color: #2196f3;
   color: #2196f3;
 }
+
+.drawtool-accordion {
+  margin-bottom: 8px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.drawtool-accordion-header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: #f5f5f5;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  transition: background 0.15s ease;
+}
+
+.drawtool-accordion-header:hover {
+  background: #eeeeee;
+}
+
+.drawtool-accordion-header.expanded {
+  background: #e8e8e8;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.drawtool-accordion-arrow {
+  font-size: 10px;
+  color: #666;
+}
+
+.drawtool-accordion-content {
+  padding: 12px;
+  background: #fff;
+}
+
+.measure-value-display {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  background: #f5f5f5;
+  border-radius: 6px;
+}
+
+.measure-value-label {
+  font-size: 11px;
+  color: #666;
+}
+
+.measure-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+}
+
+.measure-info {
+  font-size: 11px;
+  color: #666;
+  padding: 6px 8px;
+  background: #fff3e0;
+  border-radius: 4px;
+  border: 1px solid #ffb74d;
+}
+
+.drawtool-clear-btn {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #f9f9f9;
+  cursor: pointer;
+  font-size: 12px;
+  color: #666;
+  transition: all 0.15s ease;
+}
+
+.drawtool-clear-btn:hover {
+  background: #f0f0f0;
+  border-color: #ccc;
+}
+
+.measure-hint {
+  font-size: 10px;
+  color: #999;
+  text-align: center;
+}
+
+.drawtool-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #333;
+  cursor: pointer;
+}
+
+.drawtool-checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
