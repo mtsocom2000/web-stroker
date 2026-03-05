@@ -54,6 +54,30 @@ export function formatLength(value: number, unit?: LengthUnit): string {
   return `${Math.round(value)}${unit}`;
 }
 
+export function formatArea(value: number, unit?: LengthUnit): string {
+  if (!unit) {
+    if (value < 1) {
+      return value.toFixed(2);
+    }
+    if (value < 10) {
+      return value.toFixed(1);
+    }
+    return `${Math.round(value)}`;
+  }
+
+  const unitSuffix = unit === 'px' ? 'px' : unit;
+
+  if (value < 1) {
+    return `${value.toFixed(2)}${unitSuffix}²`;
+  }
+
+  if (value < 10) {
+    return `${value.toFixed(1)}${unitSuffix}²`;
+  }
+
+  return `${Math.round(value)}${unitSuffix}²`;
+}
+
 export function formatAngle(value: number, unit: AngleUnit): string {
   if (unit === 'radian') {
     return `${value.toFixed(2)}rad`;

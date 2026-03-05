@@ -30,11 +30,12 @@ export function renderClosedAreas(
   ctx: CanvasRenderingContext2D,
   areas: ClosedArea[],
   hoveredId: string | null,
+  selectedId: string | null,
   style: HighlightStyle
 ): void {
   for (const area of areas) {
-    const isHovered = area.id === hoveredId;
-    if (isHovered) {
+    const isHighlighted = area.id === hoveredId || area.id === selectedId;
+    if (isHighlighted) {
       renderHighlight(ctx, area, style);
     }
   }

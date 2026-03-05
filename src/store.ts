@@ -59,6 +59,7 @@ interface DrawingState {
   measureEndPoint: Point | null;
   measureFirstLine: { strokeId: string; segmentIndex: number } | null;
   measureSecondLine: { strokeId: string; segmentIndex: number } | null;
+  measureFaceId: string | null;
   selectMode: 'point' | 'line' | 'arc';
   lastMeasureValue: string;
   setMeasureTool: (tool: MeasureTool | null) => void;
@@ -66,6 +67,7 @@ interface DrawingState {
   setMeasureEndPoint: (point: Point | null) => void;
   setMeasureFirstLine: (line: { strokeId: string; segmentIndex: number } | null) => void;
   setMeasureSecondLine: (line: { strokeId: string; segmentIndex: number } | null) => void;
+  setMeasureFaceId: (id: string | null) => void;
   setSelectMode: (mode: 'point' | 'line' | 'arc') => void;
   setLastMeasureValue: (value: string) => void;
   clearMeasure: () => void;
@@ -215,6 +217,7 @@ export const useDrawingStore = create<DrawingState>((set) => {
     measureEndPoint: null,
     measureFirstLine: null,
     measureSecondLine: null,
+    measureFaceId: null,
     selectMode: 'point',
     lastMeasureValue: '--',
     setMeasureTool: (tool) => set({ measureTool: tool }),
@@ -222,6 +225,7 @@ export const useDrawingStore = create<DrawingState>((set) => {
     setMeasureEndPoint: (point) => set({ measureEndPoint: point }),
     setMeasureFirstLine: (line) => set({ measureFirstLine: line }),
     setMeasureSecondLine: (line) => set({ measureSecondLine: line }),
+    setMeasureFaceId: (id) => set({ measureFaceId: id }),
     setSelectMode: (mode) => {
       set({ selectMode: mode });
     },
@@ -232,9 +236,10 @@ export const useDrawingStore = create<DrawingState>((set) => {
       measureEndPoint: null,
       measureFirstLine: null,
       measureSecondLine: null,
+      measureFaceId: null,
       lastMeasureValue: '--',
     })),
-    clearCurrentMeasurement: () => set({ measureStartPoint: null, measureEndPoint: null, measureFirstLine: null, measureSecondLine: null, lastMeasureValue: '--' }),
+    clearCurrentMeasurement: () => set({ measureStartPoint: null, measureEndPoint: null, measureFirstLine: null, measureSecondLine: null, measureFaceId: null, lastMeasureValue: '--' }),
     drawingClearCounter: 0,
     incrementClearCounter: () => set((state) => ({ drawingClearCounter: state.drawingClearCounter + 1 })),
 

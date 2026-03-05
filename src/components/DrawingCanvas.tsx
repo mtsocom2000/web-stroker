@@ -6,7 +6,7 @@ import { simplifyStroke } from '../brush/strokeSimplifier';
 import { predictShape } from '../shapeRecognition';
 import { ClosedAreaManager } from '../fillRegion';
 import { IntersectionManager } from '../intersection/IntersectionManager';
-import { formatLength, formatAngle, getAcuteAngle, distance as calcDistance, angleBetween, findBestSnapPoint, type SnapResult, pixelsToUnit, findLineIntersection, checkParallelLines, lineCircleIntersections, closestPointOnSegment } from '../measurements';
+import { formatLength, formatAngle, formatArea, getAcuteAngle, distance as calcDistance, angleBetween, findBestSnapPoint, type SnapResult, pixelsToUnit, findLineIntersection, checkParallelLines, lineCircleIntersections, closestPointOnSegment } from '../measurements';
 import { chooseIntersectionByMouseAngle } from '../utils/angleHelpers';
 import './DrawingCanvas.css';
 
@@ -117,10 +117,17 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     }
     
     // Only rebuild closed areas in select mode - skip during drawing for performance
-    const isInSelectMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') || 
-                           (store.toolCategory === 'artistic' && store.mode === 'select');
+    const isInClosedAreaMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') || 
+                               (store.toolCategory === 'artistic' && store.mode === 'select') ||
+                               (store.toolCategory === 'measure' && store.measureTool === 'face');
     
-    if (closedAreaManagerRef.current && isInSelectMode) {
+    if (closedAreaManagerRef.current && isInClosedAreaMode) {
+      console.log('[face] setStrokes immediate', {
+        strokes: store.strokes.length,
+        toolCategory: store.toolCategory,
+        measureTool: store.measureTool,
+        digitalMode: store.digitalMode,
+      });
       const digitalStrokeData = store.strokes
         .filter(s => s.strokeType === 'digital')
         .map(s => ({
@@ -130,16 +137,23 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
           digitalSegments: s.digitalSegments,
           isClosed: s.isClosed,
         }));
-      closedAreaManagerRef.current.setStrokes(digitalStrokeData);
+        closedAreaManagerRef.current.setStrokes(digitalStrokeData);
     }
-  }, [store.strokes, store.toolCategory, store.digitalMode, store.mode]);
+  }, [store.strokes, store.toolCategory, store.digitalMode, store.mode, store.measureTool]);
 
   // Rebuild closed areas when switching to select mode (with debounce)
   useEffect(() => {
-    const isInSelectMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') || 
-                           (store.toolCategory === 'artistic' && store.mode === 'select');
+    const isInClosedAreaMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') || 
+                               (store.toolCategory === 'artistic' && store.mode === 'select') ||
+                               (store.toolCategory === 'measure' && store.measureTool === 'face');
     
-    if (isInSelectMode && closedAreaManagerRef.current) {
+    if (isInClosedAreaMode && closedAreaManagerRef.current) {
+      console.log('[face] setStrokes on mode change', {
+        strokes: store.strokes.length,
+        toolCategory: store.toolCategory,
+        measureTool: store.measureTool,
+        digitalMode: store.digitalMode,
+      });
       const digitalStrokeData = store.strokes
         .filter(s => s.strokeType === 'digital')
         .map(s => ({
@@ -164,11 +178,19 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       
       return () => clearTimeout(timeoutId);
     }
-  }, [store.toolCategory, store.digitalMode, store.mode]);
+  }, [store.toolCategory, store.digitalMode, store.mode, store.measureTool]);
 
   useEffect(() => {
     panRef.current = { x: store.panX, y: store.panY, zoom: store.zoom };
   }, [store.panX, store.panY, store.zoom]);
+
+  useEffect(() => {
+    if (store.toolCategory !== 'measure' || store.measureTool !== 'face') {
+      if (closedAreaManagerRef.current) {
+        closedAreaManagerRef.current.setSelectedAreaId(null);
+      }
+    }
+  }, [store.toolCategory, store.measureTool]);
 
   useEffect(() => {
     brushSettingsRef.current = store.currentBrushSettings;
@@ -522,6 +544,22 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       ctx.restore();
     }
 
+    if (store.toolCategory === 'measure' && store.measureTool === 'face' && closedAreaManagerRef.current) {
+      const hoveredId = closedAreaManagerRef.current.getHoveredAreaId();
+      const selectedId = store.measureFaceId;
+      const targetId = selectedId ?? hoveredId;
+      if (targetId) {
+        const targetArea = closedAreaManagerRef.current.getClosedAreas().find(area => area.id === targetId);
+        if (targetArea) {
+          const centroid = computePolygonCentroid(targetArea.polygon);
+          const labelScreen = worldToScreen(centroid.x, centroid.y);
+          const areaValue = targetArea.area / (store.pixelsPerUnit * store.pixelsPerUnit);
+          const label = formatArea(areaValue, store.unit);
+          drawMeasurementLabel(ctx, labelScreen, label, '#ff9800');
+        }
+      }
+    }
+
     // Draw digital strokes (lines, circles, curves)
     const isInSelectMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') || 
                            (store.toolCategory === 'artistic' && store.mode === 'select');
@@ -610,6 +648,21 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
          }
       });
     });
+
+    if (store.toolCategory === 'measure' && store.measureTool === 'face') {
+      const hoveredId = closedAreaManagerRef.current?.getHoveredAreaId() ?? 'none';
+      const selectedId = store.measureFaceId ?? 'none';
+      const faceCount = closedAreaManagerRef.current?.getClosedAreas().length ?? 0;
+      ctx.save();
+      ctx.font = '12px sans-serif';
+      ctx.fillStyle = '#111';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(`faces: ${faceCount}`, 12, 12);
+      ctx.fillText(`hovered: ${hoveredId}`, 12, 28);
+      ctx.fillText(`selected: ${selectedId}`, 12, 44);
+      ctx.restore();
+    }
 
     // Draw intersection points (crosses) in select mode
     // Use lazy calculation - only find intersections near mouse when hovering
@@ -1307,6 +1360,19 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
             });
           }
         }
+        } else if (measureTool === 'face') {
+          if (closedAreaManagerRef.current) {
+            const area = closedAreaManagerRef.current.hitTest(snappedWorld);
+            if (area) {
+              const areaValue = area.area / (store.pixelsPerUnit * store.pixelsPerUnit);
+              store.setLastMeasureValue(formatArea(areaValue, store.unit));
+              store.setMeasureFaceId(area.id);
+              closedAreaManagerRef.current.setSelectedAreaId(area.id);
+            } else {
+              store.setMeasureFaceId(null);
+              closedAreaManagerRef.current.setSelectedAreaId(null);
+            }
+          }
         }
       return;
     }
@@ -2033,9 +2099,14 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     }
 
     // Handle hover for closed areas (skip during drag to avoid expensive recalculations)
-    if (closedAreaManagerRef.current && isInSelectMode && !isDraggingDigital) {
-      const hoveredArea = closedAreaManagerRef.current.hitTest(world);
-      closedAreaManagerRef.current.setHoveredAreaId(hoveredArea?.id ?? null);
+    if (closedAreaManagerRef.current && !isDraggingDigital) {
+      const isInClosedAreaMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') ||
+                                 (store.toolCategory === 'artistic' && store.mode === 'select') ||
+                                 (store.toolCategory === 'measure' && store.measureTool === 'face');
+      if (isInClosedAreaMode) {
+        const hoveredArea = closedAreaManagerRef.current.hitTest(world);
+        closedAreaManagerRef.current.setHoveredAreaId(hoveredArea?.id ?? null);
+      }
     }
 
     if (isPanning) {
@@ -2340,6 +2411,9 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         if (store.toolCategory === 'measure') {
           store.clearCurrentMeasurement();
           measurePreviewRef.current = null;
+          if (closedAreaManagerRef.current) {
+            closedAreaManagerRef.current.setSelectedAreaId(null);
+          }
           return;
         }
       }}
@@ -2914,6 +2988,32 @@ function drawMeasurementLabel(
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillText(text, position.x + 6 + padding, position.y);
+}
+
+function computePolygonCentroid(points: Point[]): Point {
+  if (points.length === 0) {
+    return { x: 0, y: 0 };
+  }
+
+  let area = 0;
+  let cx = 0;
+  let cy = 0;
+  const n = points.length;
+
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const cross = points[i].x * points[j].y - points[j].x * points[i].y;
+    area += cross;
+    cx += (points[i].x + points[j].x) * cross;
+    cy += (points[i].y + points[j].y) * cross;
+  }
+
+  if (Math.abs(area) < 1e-10) {
+    return points[0];
+  }
+
+  const factor = 1 / (3 * area);
+  return { x: cx * factor, y: cy * factor };
 }
 
 function drawAngleArc(

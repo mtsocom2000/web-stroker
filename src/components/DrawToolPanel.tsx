@@ -55,15 +55,17 @@ const MEASURE_ICONS: Record<MeasureTool, string> = {
   distance: '📏',
   angle: '📐',
   radius: '⭕',
+  face: '⬛',
 };
 
 const MEASURE_LABELS: Record<MeasureTool, string> = {
   distance: 'Distance',
   angle: 'Angle',
   radius: 'Radius',
+  face: 'Face',
 };
 
-const MEASURE_TOOLS: MeasureTool[] = ['distance', 'angle', 'radius'];
+const MEASURE_TOOLS: MeasureTool[] = ['distance', 'angle', 'radius', 'face'];
 
 export const DrawToolPanel: React.FC = () => {
   const store = useDrawingStore();
@@ -160,6 +162,8 @@ export const DrawToolPanel: React.FC = () => {
       store.setSelectMode('arc');
     } else if (tool === 'angle') {
       store.setSelectMode('line');
+    } else if (tool === 'face') {
+      store.setSelectMode('point');
     }
   };
 

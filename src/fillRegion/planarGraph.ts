@@ -231,15 +231,6 @@ export function buildPlanarGraph(strokes: Stroke[]): PlanarGraph {
           v2: segment.points[1],
           strokeId: stroke.id,
         });
-        
-        // If line is closed, add closing edge
-        if (stroke.isClosed) {
-          rawEdges.push({
-            v1: segment.points[1],
-            v2: segment.points[0],
-            strokeId: stroke.id,
-          });
-        }
       }
     }
   }
@@ -297,7 +288,10 @@ export function buildPlanarGraph(strokes: Stroke[]): PlanarGraph {
     const v1 = getOrCreateVertex(seg.v1, vertices, spatialHash);
     const v2 = getOrCreateVertex(seg.v2, vertices, spatialHash);
 
-    if (v1.id === v2.id) continue;
+    if (v1.id === v2.id) {
+      console.log('[face] Skipping degenerate edge (v1 === v2)', { v1: v1.position });
+      continue;
+    }
 
     const edge: Edge = {
       id: generateId(),
@@ -326,6 +320,18 @@ export function buildPlanarGraph(strokes: Stroke[]): PlanarGraph {
       return angleA - angleB;
     });
   }
+
+  // Debug logging
+  const vertexDegrees = vertices.map(v => v.incidentEdges.length);
+  console.log('[face] buildPlanarGraph result', {
+    strokesProcessed: strokes.length,
+    rawEdgesGenerated: rawEdges.length,
+    processedEdgesCount: processedEdges.length,
+    verticesCount: vertices.length,
+    edgesCount: edges.length,
+    vertexDegrees,
+    verticesWith2OrMoreEdges: vertices.filter(v => v.incidentEdges.length >= 2).length,
+  });
 
   return { vertices, edges };
 }

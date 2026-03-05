@@ -68,7 +68,7 @@ export class ClosedAreaManager {
     this.hoveredAreaId = null;
     this.selectedAreaId = null;
 
-    if (this.strokes.length < 2) {
+    if (this.strokes.length < 1) {
       this.notifyChange();
       return;
     }
@@ -81,6 +81,11 @@ export class ClosedAreaManager {
     }
 
     const faces = extractFaces(edges);
+    console.log('[face] rebuild', {
+      strokes: this.strokes.length,
+      edges: edges.length,
+      faces: faces.length,
+    });
 
     for (const face of faces) {
       const strokeIds = [...new Set(face.edgeIds.map(eid => {
@@ -119,6 +124,11 @@ export class ClosedAreaManager {
 
   getSelectedAreaId(): string | null {
     return this.selectedAreaId;
+  }
+
+  setSelectedAreaId(id: string | null): void {
+    this.selectedAreaId = id;
+    this.notifyChange();
   }
 
   hitTest(point: Point): ClosedArea | null {
@@ -172,7 +182,7 @@ export class ClosedAreaManager {
   }
 
   render(ctx: CanvasRenderingContext2D): void {
-    renderClosedAreas(ctx, this.closedAreas, this.hoveredAreaId, this.highlightStyle);
+    renderClosedAreas(ctx, this.closedAreas, this.hoveredAreaId, this.selectedAreaId, this.highlightStyle);
   }
 
   setHighlightStyle(style: Partial<HighlightStyle>): void {
