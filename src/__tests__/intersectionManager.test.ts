@@ -1,7 +1,24 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Point, Stroke } from '../types';
 import { SpatialIndex, computeBbox, bboxesIntersect } from '../intersection/SpatialIndex';
 import { IntersectionManager } from '../intersection/IntersectionManager';
+
+// Mock browser APIs for Node.js test environment
+if (typeof globalThis.requestAnimationFrame === 'undefined') {
+  globalThis.requestAnimationFrame = vi.fn((callback: FrameRequestCallback): number => {
+    // Execute callback synchronously in tests
+    callback(performance.now());
+    return 0;
+  }) as unknown as typeof requestAnimationFrame;
+  
+  globalThis.cancelAnimationFrame = vi.fn() as unknown as typeof cancelAnimationFrame;
+}
+
+if (typeof globalThis.performance === 'undefined') {
+  globalThis.performance = {
+    now: () => Date.now(),
+  } as Performance;
+}
 
 describe('SpatialIndex', () => {
   let spatialIndex: SpatialIndex;

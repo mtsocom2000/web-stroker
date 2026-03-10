@@ -1,5 +1,21 @@
 # AGENTS
 
+## Project Documentation Reference
+**Web Stroker** - 2D Geometry Drawing Application
+
+### System Documentation
+- **`SYSTEM_OVERVIEW.md`** - High-level project summary and application architecture
+- **`docs/ARCHITECTURE.md`** - Detailed technical architecture and implementation patterns
+- **`docs/features.md`** - Feature implementation status and roadmap
+- **`README.md`** - Project setup and development instructions
+
+### Application Context
+This is a 2D geometry drawing, picking, intersecting, and measuring application with:
+- **Artistic Mode**: Freehand drawing with stroke smoothing and shape prediction
+- **Digital Mode**: Precision geometric drawing (line/circle/arc/curve) and measurements
+- **Measurement Tools**: Distance, angle, radius, face area with unit conversion
+- **File Management**: Save/load functionality with undo/redo history
+
 <skills_system priority="1">
 
 ## Available Skills
