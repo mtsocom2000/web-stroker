@@ -163,6 +163,17 @@
   border-color: #f44336;
 }
 
+.toolbar-btn-warning {
+  color: #ff9800;
+  border-color: #ffe0b2;
+  background: #fff3e0;
+}
+
+.toolbar-btn-warning:hover:not(:disabled) {
+  background: #ffe0b2;
+  border-color: #ff9800;
+}
+
 .toolbar-info {
   margin-left: auto;
   font-size: 12px;
@@ -196,4 +207,81 @@
     margin-left: 0;
     margin-top: 4px;
   }
+
+  .drawing-mode-group {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .mode-buttons {
+    flex-wrap: wrap;
+  }
+}
+
+/* Drawing mode button group styles */
+.drawing-mode-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mode-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.mode-buttons {
+  display: flex;
+  gap: 2px;
+}
+
+.mode-btn {
+  padding: 6px 12px;
+  background: var(--surface);
+  color: var(--text-primary);
+  border: 1px solid var(--divider);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition);
+  white-space: nowrap;
+}
+
+.mode-btn:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.mode-btn:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.mode-btn:not(:first-child):not(:last-child) {
+  border-left: none;
+  border-right: none;
+}
+
+.mode-btn:first-child:not(:last-child) {
+  border-right: none;
+}
+
+.mode-btn:last-child:not(:first-child) {
+  border-left: none;
+}
+
+.mode-btn:hover {
+  background: var(--surface-alt);
+}
+
+.mode-btn.active {
+  background: var(--primary) !important;
+  color: white !important;
+  border-color: var(--primary) !important;
+}
+
+.mode-btn.active:hover {
+  background: var(--primary-dark, #1565c0) !important;
+  border-color: var(--primary-dark, #1565c0) !important;
 }

@@ -1,0 +1,63 @@
+{
+  "version": "1.0.0",
+  "timestamp": 1710240011000,
+  "description": "Quarter circle arc (90 degrees, from top going clockwise to right, center at 100,100, radius 50)",
+  "expectedShape": "arc",
+  "canvasState": {
+    "strokes": [
+      {
+        "id": "baseline_arc_quarter_001",
+        "points": [
+          {"x": 100, "y": 50, "timestamp": 1000},
+          {"x": 104, "y": 50, "timestamp": 1016},
+          {"x": 108, "y": 51, "timestamp": 1032},
+          {"x": 112, "y": 52, "timestamp": 1048},
+          {"x": 116, "y": 54, "timestamp": 1064},
+          {"x": 120, "y": 56, "timestamp": 1080},
+          {"x": 124, "y": 58, "timestamp": 1096},
+          {"x": 127, "y": 61, "timestamp": 1112},
+          {"x": 130, "y": 64, "timestamp": 1128},
+          {"x": 133, "y": 67, "timestamp": 1144},
+          {"x": 136, "y": 70, "timestamp": 1160},
+          {"x": 139, "y": 74, "timestamp": 1176},
+          {"x": 142, "y": 78, "timestamp": 1192},
+          {"x": 144, "y": 82, "timestamp": 1208},
+          {"x": 146, "y": 86, "timestamp": 1224},
+          {"x": 148, "y": 90, "timestamp": 1240},
+          {"x": 149, "y": 95, "timestamp": 1256},
+          {"x": 150, "y": 100, "timestamp": 1272}
+        ],
+        "smoothedPoints": [
+          {"x": 100, "y": 50},
+          {"x": 104, "y": 50},
+          {"x": 108, "y": 51},
+          {"x": 112, "y": 52},
+          {"x": 116, "y": 54},
+          {"x": 120, "y": 56},
+          {"x": 124, "y": 58},
+          {"x": 127, "y": 61},
+          {"x": 130, "y": 64},
+          {"x": 133, "y": 67},
+          {"x": 136, "y": 70},
+          {"x": 139, "y": 74},
+          {"x": 142, "y": 78},
+          {"x": 144, "y": 82},
+          {"x": 146, "y": 86},
+          {"x": 148, "y": 90},
+          {"x": 149, "y": 95},
+          {"x": 150, "y": 100}
+        ],
+        "color": "#000000",
+        "thickness": 2,
+        "timestamp": 1000,
+        "strokeType": "artistic"
+      }
+    ],
+    "canvasWidth": 200,
+    "canvasHeight": 200,
+    "zoom": 1,
+    "panX": 0,
+    "panY": 0,
+    "strokeMode": "original"
+  }
+}

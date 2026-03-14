@@ -1,0 +1,50 @@
+{
+  "version": "1.0.0",
+  "timestamp": 1710240002000,
+  "description": "Diagonal line drawn from top-left to bottom-right",
+  "expectedShape": "line",
+  "canvasState": {
+    "strokes": [
+      {
+        "id": "baseline_line_diagonal_001",
+        "points": [
+          {"x": 50, "y": 50, "timestamp": 1000},
+          {"x": 55, "y": 55, "timestamp": 1016},
+          {"x": 60, "y": 60, "timestamp": 1032},
+          {"x": 65, "y": 65, "timestamp": 1048},
+          {"x": 70, "y": 70, "timestamp": 1064},
+          {"x": 75, "y": 75, "timestamp": 1080},
+          {"x": 80, "y": 80, "timestamp": 1096},
+          {"x": 85, "y": 85, "timestamp": 1112},
+          {"x": 90, "y": 90, "timestamp": 1128},
+          {"x": 95, "y": 95, "timestamp": 1144},
+          {"x": 100, "y": 100, "timestamp": 1160},
+          {"x": 105, "y": 105, "timestamp": 1176},
+          {"x": 110, "y": 110, "timestamp": 1192},
+          {"x": 115, "y": 115, "timestamp": 1208},
+          {"x": 120, "y": 120, "timestamp": 1224},
+          {"x": 125, "y": 125, "timestamp": 1240},
+          {"x": 130, "y": 130, "timestamp": 1256},
+          {"x": 135, "y": 135, "timestamp": 1272},
+          {"x": 140, "y": 140, "timestamp": 1288},
+          {"x": 145, "y": 145, "timestamp": 1304},
+          {"x": 150, "y": 150, "timestamp": 1320}
+        ],
+        "smoothedPoints": [
+          {"x": 50, "y": 50},
+          {"x": 150, "y": 150}
+        ],
+        "color": "#000000",
+        "thickness": 2,
+        "timestamp": 1000,
+        "strokeType": "artistic"
+      }
+    ],
+    "canvasWidth": 200,
+    "canvasHeight": 200,
+    "zoom": 1,
+    "panX": 0,
+    "panY": 0,
+    "strokeMode": "original"
+  }
+}

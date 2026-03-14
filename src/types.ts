@@ -78,8 +78,8 @@ export interface CanvasState {
   zoom: number;
   panX: number;
   panY: number;
-  predictEnabled?: boolean;
-  smoothEnabled?: boolean;
+  /** Stroke processing mode: original, smooth, or predict */
+  strokeMode?: 'original' | 'smooth' | 'predict';
 }
 
 export interface DrawingData {

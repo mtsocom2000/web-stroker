@@ -1,0 +1,59 @@
+{
+  "version": "1.0.0",
+  "timestamp": 1710240004000,
+  "description": "V-shaped angle (approximately 60 degrees)",
+  "expectedShape": "polyline",
+  "canvasState": {
+    "strokes": [
+      {
+        "id": "baseline_angle_v_shape_001",
+        "points": [
+          {"x": 50, "y": 50, "timestamp": 1000},
+          {"x": 52, "y": 54, "timestamp": 1016},
+          {"x": 55, "y": 58, "timestamp": 1032},
+          {"x": 58, "y": 62, "timestamp": 1048},
+          {"x": 62, "y": 66, "timestamp": 1064},
+          {"x": 66, "y": 70, "timestamp": 1080},
+          {"x": 70, "y": 74, "timestamp": 1096},
+          {"x": 74, "y": 78, "timestamp": 1112},
+          {"x": 78, "y": 82, "timestamp": 1128},
+          {"x": 82, "y": 86, "timestamp": 1144},
+          {"x": 86, "y": 90, "timestamp": 1160},
+          {"x": 90, "y": 94, "timestamp": 1176},
+          {"x": 94, "y": 98, "timestamp": 1192},
+          {"x": 98, "y": 102, "timestamp": 1208},
+          {"x": 100, "y": 106, "timestamp": 1224},
+          {"x": 100, "y": 102, "timestamp": 1240},
+          {"x": 102, "y": 98, "timestamp": 1256},
+          {"x": 106, "y": 94, "timestamp": 1272},
+          {"x": 110, "y": 90, "timestamp": 1288},
+          {"x": 114, "y": 86, "timestamp": 1304},
+          {"x": 118, "y": 82, "timestamp": 1320},
+          {"x": 122, "y": 78, "timestamp": 1336},
+          {"x": 126, "y": 74, "timestamp": 1352},
+          {"x": 130, "y": 70, "timestamp": 1368},
+          {"x": 134, "y": 66, "timestamp": 1384},
+          {"x": 138, "y": 62, "timestamp": 1400},
+          {"x": 142, "y": 58, "timestamp": 1416},
+          {"x": 146, "y": 54, "timestamp": 1432},
+          {"x": 150, "y": 50, "timestamp": 1448}
+        ],
+        "smoothedPoints": [
+          {"x": 50, "y": 50},
+          {"x": 100, "y": 106},
+          {"x": 150, "y": 50}
+        ],
+        "color": "#000000",
+        "thickness": 2,
+        "timestamp": 1000,
+        "strokeType": "artistic"
+      }
+    ],
+    "canvasWidth": 200,
+    "canvasHeight": 200,
+    "zoom": 1,
+    "panX": 0,
+    "panY": 0,
+    "strokeMode": "original"
+  }
+}

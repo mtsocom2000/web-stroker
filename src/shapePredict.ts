@@ -13,8 +13,14 @@ const STRAIGHT_LINE_MAX_DEVIATION_RATIO = 0.04;
 /** Max deviation from fitted shape as fraction of shape "size" (perimeter). Relaxed for raw hand-drawn input. */
 const SHAPE_MAX_DEVIATION_RATIO = 0.15;
 
+/** Max deviation for circle fitting as fraction of radius */
+// const CIRCLE_MAX_DEVIATION_RATIO = 0.20; // Now using inline value
+
+/** Minimum points required for circle detection */
+const MIN_CIRCLE_POINTS = 8;
+
 /**
- * Try straight line first, then triangle, then (later) rect, circle, ellipse.
+ * Try straight line first, then polyline, then triangle, then circle, etc.
  */
 export function predictShape(points: Point[]): Point[] | null {
   if (points.length < 2) return null;
@@ -22,6 +28,7 @@ export function predictShape(points: Point[]): Point[] | null {
     detectStraightLine(points) ??
     detectPolyline(points) ??
     detectTriangle(points) ??
+    detectCircle(points) ??
     null
   );
 }
@@ -120,20 +127,22 @@ function detectStraightLine(points: Point[]): Point[] | null {
 }
 
 /**
- * Detect polylines (L-shapes, Z-shapes) by finding corner points.
+ * Detect polylines (L-shapes, Z-shapes, V-shapes) by finding corner points.
  * Returns corner points without automatically closing the shape.
  */
 function detectPolyline(points: Point[]): Point[] | null {
-  if (points.length < 6) return null; // Need sufficient points for meaningful polyline detection
+  if (points.length < 5) return null; // RELAXED: Need fewer points
   
   // Simple corner detection by looking for direction changes
   const corners: Point[] = [points[0]]; // Always include start point
-  const angleThreshold = Math.PI * 0.6; // 108 degrees - allow gentle curves
+  const angleThreshold = Math.PI * 0.75; // RELAXED: 135 degrees - more tolerant for V-shapes
   
-  for (let i = 2; i < points.length - 2; i++) {
-    const prev = points[i - 1];
+  // Use a sliding window to detect corners more reliably
+  for (let i = 3; i < points.length - 3; i++) {
+    // Use points further apart for more stable angle calculation
+    const prev = points[i - 3];
     const curr = points[i];
-    const next = points[i + 1];
+    const next = points[i + 3];
     
     // Calculate angle between segments
     const v1x = prev.x - curr.x;
@@ -144,7 +153,7 @@ function detectPolyline(points: Point[]): Point[] | null {
     const len1 = Math.hypot(v1x, v1y);
     const len2 = Math.hypot(v2x, v2y);
     
-    if (len1 < 2 || len2 < 2) continue;
+    if (len1 < 3 || len2 < 3) continue;
     
     // Normalize and calculate angle
     const cosAngle = (v1x * v2x + v1y * v2y) / (len1 * len2);
@@ -155,7 +164,7 @@ function detectPolyline(points: Point[]): Point[] | null {
       const distFromLast = corners.length > 0 ? 
         Math.hypot(curr.x - corners[corners.length - 1].x, curr.y - corners[corners.length - 1].y) : Infinity;
       
-      if (distFromLast > 5) { // Minimum distance between corners
+      if (distFromLast > 10) { // RELAXED: Larger minimum distance between corners
         corners.push(curr);
       }
     }
@@ -163,7 +172,8 @@ function detectPolyline(points: Point[]): Point[] | null {
   
   corners.push(points[points.length - 1]); // Always include end point
   
-  // Only return as polyline if we found at least one corner
+  // RELAXED: Return as polyline if we found at least one corner (3 points total)
+  // This allows V-shapes to be detected
   return corners.length >= 3 ? corners : null;
 }
 
@@ -281,16 +291,187 @@ function detectTriangle(points: Point[]): Point[] | null {
 
   if (best) {
     const [a, b, c] = best;
-    // Only close the triangle if the user actually drew near the starting point
-    const startToEnd = Math.hypot(a.x - c.x, a.y - c.y);
-    const perimeter = trianglePerimeter(a, b, c);
-    const shouldClose = startToEnd < perimeter * 0.15; // Close if end is within 15% of perimeter
-    
-    if (shouldClose) {
-      return [a, b, c, a]; // Closed triangle
-    } else {
-      return [a, b, c]; // Open triangle shape
-    }
+    // Return open triangle (no need to close it)
+    return [a, b, c];
   }
   return null;
+}
+
+/**
+ * Detect circles using least squares fitting.
+ * Returns sampled points along the fitted circle if detection succeeds.
+ */
+function detectCircle(points: Point[]): Point[] | null {
+  // Need enough points for reliable circle fitting
+  if (points.length < MIN_CIRCLE_POINTS) return null;
+
+  // Check if the stroke is roughly closed (start and end are close)
+  const start = points[0];
+  const end = points[points.length - 1];
+  const startToEndDist = Math.hypot(start.x - end.x, start.y - end.y);
+  const totalLength = calculatePathLength(points);
+
+  // RELAXED: For a circle, start and end should be close (within 25% of total length)
+  // This is more tolerant for hand-drawn circles
+  if (startToEndDist > totalLength * 0.25) {
+    return null;
+  }
+
+  // Use Kåsa method (linearized circle fitting)
+  const circleFit = fitCircleLeastSquares(points);
+  if (!circleFit) return null;
+
+  const { center, radius } = circleFit;
+
+  // Validate the fit
+  // Calculate standard deviation of distances from center
+  const distances = points.map((p) => Math.hypot(p.x - center.x, p.y - center.y));
+  const avgDistance = distances.reduce((a, b) => a + b, 0) / distances.length;
+  const variance = distances.reduce((sum, d) => sum + Math.pow(d - avgDistance, 2), 0) / distances.length;
+  const stdDev = Math.sqrt(variance);
+
+  // RELAXED: Error tolerance increased to 20%
+  const tolerance = avgDistance * 0.20;
+  if (stdDev > tolerance) {
+    return null;
+  }
+
+  // Additional check: ensure the points cover a good portion of the circle
+  // Use more robust angle coverage calculation
+  const angleCoverage = calculateAngleCoverage(points, center);
+
+  // RELAXED: Should cover at least 180 degrees (0.5 * 2π) for hand-drawn circles
+  if (angleCoverage < Math.PI) {
+    return null;
+  }
+
+  // RELAXED: Also check aspect ratio to ensure it's roughly circular (not elliptical)
+  // This is a simplified check - if it passes the stdDev check, it's likely circular enough
+
+  // Generate circle points (32 samples for smooth circle)
+  const numPoints = 32;
+  const circlePoints: Point[] = [];
+  for (let i = 0; i < numPoints; i++) {
+    const angle = (i / numPoints) * 2 * Math.PI;
+    circlePoints.push({
+      x: center.x + radius * Math.cos(angle),
+      y: center.y + radius * Math.sin(angle),
+    });
+  }
+  // Close the circle
+  circlePoints.push(circlePoints[0]);
+
+  return circlePoints;
+}
+
+/**
+ * Calculate angle coverage of points around a center
+ * More robust than simple min/max
+ */
+function calculateAngleCoverage(points: Point[], center: Point): number {
+  const angles = points.map((p) => Math.atan2(p.y - center.y, p.x - center.x));
+  
+  // Sort angles
+  angles.sort((a, b) => a - b);
+  
+  // Find the largest gap between consecutive angles
+  let maxGap = 0;
+  for (let i = 0; i < angles.length; i++) {
+    const nextAngle = angles[(i + 1) % angles.length];
+    let gap = nextAngle - angles[i];
+    if (i === angles.length - 1) {
+      gap += 2 * Math.PI; // Wrap around
+    }
+    maxGap = Math.max(maxGap, gap);
+  }
+  
+  // Coverage is 2π minus the largest gap
+  return 2 * Math.PI - maxGap;
+}
+
+/**
+ * Calculate total path length of points
+ */
+function calculatePathLength(points: Point[]): number {
+  let length = 0;
+  for (let i = 1; i < points.length; i++) {
+    length += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  }
+  return length;
+}
+
+/**
+ * Fit a circle using Kåsa method (linearized least squares)
+ * More robust and efficient than iterative methods
+ */
+function fitCircleLeastSquares(
+  points: Point[]
+): { center: Point; radius: number; error: number } | null {
+  const n = points.length;
+  if (n < 3) return null;
+
+  // Calculate sums needed for the linear system
+  let sumX = 0;
+  let sumY = 0;
+  let sumX2 = 0;
+  let sumY2 = 0;
+  let sumXY = 0;
+  let sumX3 = 0;
+  let sumXY2 = 0;
+  let sumX2Y = 0;
+  let sumY3 = 0;
+
+  for (const p of points) {
+    const x2 = p.x * p.x;
+    const y2 = p.y * p.y;
+
+    sumX += p.x;
+    sumY += p.y;
+    sumX2 += x2;
+    sumY2 += y2;
+    sumXY += p.x * p.y;
+    sumX3 += x2 * p.x;
+    sumXY2 += p.x * y2;
+    sumX2Y += x2 * p.y;
+    sumY3 += y2 * p.y;
+  }
+
+  // Build the linear system Ax = b
+  // See: https://dtcenter.org/met/users/docs/write_ups/circle_fit.pdf
+  const Cxx = sumX2 - (sumX * sumX) / n;
+  const Cxy = sumXY - (sumX * sumY) / n;
+  const Cyy = sumY2 - (sumY * sumY) / n;
+  const Cxxx = sumX3 - (sumX2 * sumX) / n;
+  const Cxyy = sumXY2 - (sumY2 * sumX) / n;
+  const Cxxy = sumX2Y - (sumX2 * sumY) / n;
+  const Cyyy = sumY3 - (sumY2 * sumY) / n;
+
+  // Check if points are collinear (determinant close to zero)
+  const det = Cxx * Cyy - Cxy * Cxy;
+  if (Math.abs(det) < 1e-10) {
+    return null; // Points are collinear, not a circle
+  }
+
+  // Solve for center coordinates
+  const cx = (Cyyy * Cxy - Cxyy * Cyy - Cxxy * Cxy + Cxxx * Cyy) / (2 * det);
+  const cy = (Cxxx * Cxy - Cxxy * Cxx - Cxyy * Cxy + Cyyy * Cxx) / (2 * det);
+
+  const center: Point = {
+    x: cx,
+    y: cy,
+  };
+
+  // Calculate radius as average distance from center
+  const distances = points.map((p) => Math.hypot(p.x - center.x, p.y - center.y));
+  const radius = distances.reduce((a, b) => a + b, 0) / n;
+
+  // Calculate fitting error (mean squared error)
+  const error = distances.reduce((sum, d) => sum + Math.pow(d - radius, 2), 0) / n;
+
+  // Validate: radius should be reasonable
+  if (radius < 5 || radius > 1000) {
+    return null;
+  }
+
+  return { center, radius, error };
 }

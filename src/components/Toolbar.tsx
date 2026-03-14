@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { useDrawingStore } from '../store';
+import { useDrawingStore, type StrokeMode } from '../store';
 import type { DrawingData } from '../types';
 import './Toolbar.css';
 
@@ -18,8 +18,7 @@ export const Toolbar: React.FC = () => {
         zoom: store.zoom,
         panX: store.panX,
         panY: store.panY,
-        predictEnabled: store.predictEnabled,
-        smoothEnabled: store.smoothEnabled,
+        strokeMode: store.strokeMode,
       },
     };
 
@@ -45,10 +44,10 @@ export const Toolbar: React.FC = () => {
     reader.onload = (event) => {
       try {
         const data = JSON.parse(event.target?.result as string) as DrawingData;
-        
+
         // Clear all existing strokes first
         store.clearStrokes();
-        
+
         // Add all strokes from file
         data.canvasState.strokes.forEach((stroke) => {
           store.addStroke(stroke);
@@ -56,13 +55,10 @@ export const Toolbar: React.FC = () => {
 
         store.setZoom(data.canvasState.zoom);
         store.setPan(data.canvasState.panX ?? 0, data.canvasState.panY ?? 0);
-        if (data.canvasState.predictEnabled !== undefined) {
-          store.setPredictEnabled(data.canvasState.predictEnabled);
+        if (data.canvasState.strokeMode !== undefined) {
+          store.setStrokeMode(data.canvasState.strokeMode);
         }
-        if (data.canvasState.smoothEnabled !== undefined) {
-          store.setSmoothEnabled(data.canvasState.smoothEnabled);
-        }
-        
+
         // Trigger a re-render of the canvas to update camera
         window.dispatchEvent(new Event('resize'));
       } catch (error) {
@@ -76,6 +72,10 @@ export const Toolbar: React.FC = () => {
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
+  };
+
+  const handleStrokeModeChange = (mode: StrokeMode) => {
+    store.setStrokeMode(mode);
   };
 
   return (
@@ -107,31 +107,53 @@ export const Toolbar: React.FC = () => {
 
       <div className="toolbar-divider" />
 
-      <div className="toolbar-group">
-        <label htmlFor="smooth-checkbox" title="Apply smoothing to freehand curves">
-          <input
-            id="smooth-checkbox"
-            type="checkbox"
-            checked={store.smoothEnabled}
-            onChange={(e) => store.setSmoothEnabled(e.target.checked)}
-          />
-          {' '}Smooth
-        </label>
-      </div>
-
-      <div className="toolbar-group">
-        <label htmlFor="predict-checkbox" title="Simplify strokes to straight lines and shapes when possible">
-          <input
-            id="predict-checkbox"
-            type="checkbox"
-            checked={store.predictEnabled}
-            onChange={(e) => store.setPredictEnabled(e.target.checked)}
-          />
-          {' '}Predict
-        </label>
+      <div className="toolbar-group drawing-mode-group">
+        <span className="mode-label">Brush:</span>
+        <div className="mode-buttons">
+          <button
+            className={`mode-btn ${store.strokeMode === 'original' ? 'active' : ''}`}
+            onClick={() => handleStrokeModeChange('original')}
+            title="Draw with original strokes (no processing)"
+          >
+            Original
+          </button>
+          <button
+            className={`mode-btn ${store.strokeMode === 'smooth' ? 'active' : ''}`}
+            onClick={() => handleStrokeModeChange('smooth')}
+            title="Smooth strokes while preserving curves"
+          >
+            Smooth
+          </button>
+          <button
+            className={`mode-btn ${store.strokeMode === 'predict' ? 'active' : ''}`}
+            onClick={() => handleStrokeModeChange('predict')}
+            title="Recognize and perfect geometric shapes"
+          >
+            Predict
+          </button>
+        </div>
       </div>
 
       <div className="toolbar-divider" />
+
+      {/* Undo Predict button - only show when in predict mode and there's data to restore */}
+      {store.strokeMode === 'predict' && store.lastStrokeOriginalData && (
+        <>
+          <button
+            className="toolbar-btn toolbar-btn-warning"
+            onClick={() => {
+              const success = store.undoLastPredict();
+              if (success) {
+                console.log('Prediction undone - restored to original stroke');
+              }
+            }}
+            title="Undo last prediction and restore original stroke"
+          >
+            Undo Predict
+          </button>
+          <div className="toolbar-divider" />
+        </>
+      )}
 
       <button
         className="toolbar-btn"

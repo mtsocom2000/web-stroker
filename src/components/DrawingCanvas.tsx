@@ -3,7 +3,9 @@ import { useDrawingStore } from '../store';
 import type { Point, Stroke, DigitalSegment } from '../types';
 import { generateId, distance } from '../utils';
 import { simplifyStroke } from '../brush/strokeSimplifier';
-import { predictShape } from '../shapeRecognition';
+import { smoothStrokeCatmullRom, smoothStrokeEnhanced } from '../brush/curveSmoothing';
+import { predictShape } from '../predict';
+import { validateShapePrediction } from '../predict/shapeSimilarity';
 import { ClosedAreaManager } from '../fillRegion';
 import { IntersectionManager } from '../intersection/IntersectionManager';
 import { formatLength, formatAngle, formatArea, getAcuteAngle, distance as calcDistance, angleBetween, findBestSnapPoint, type SnapResult, pixelsToUnit, findLineIntersection, checkParallelLines, lineCircleIntersections, closestPointOnSegment } from '../measurements';
@@ -2252,12 +2254,71 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     if (currentStrokePoints.length > 1) {
       const { simplifiedPoints, cornerPoints, cornerIndices, segments } = simplifyStroke(currentStrokePoints);
 
+      // Determine display points based on stroke mode
       let displayPoints: Point[] | undefined;
-      if (store.predictEnabled) {
-        const predicted = predictShape(simplifiedPoints);
-        if (predicted) {
-          displayPoints = predicted;
+      switch (store.strokeMode) {
+        case 'original':
+          // Use original points without any processing
+          displayPoints = currentStrokePoints;
+          break;
+
+        case 'smooth': {
+          // 增强版平滑管线：距离过滤 → Chaikin平滑 → Catmull-Rom插值
+          const chaikinPoints = smoothStrokeEnhanced(currentStrokePoints, {
+            enableDistanceFilter: true,
+            distanceThreshold: 3,
+            enableChaikin: true,
+            chaikinIterations: 2,
+          });
+          // 最终Catmull-Rom样条插值获得C1连续曲线
+          displayPoints = smoothStrokeCatmullRom(chaikinPoints, {
+            tension: 0.5,
+            segmentCount: 10
+          });
+          break;
         }
+
+        case 'predict': {
+          // Try to recognize geometric shapes
+          const predicted = predictShape(currentStrokePoints);
+          if (predicted) {
+            // 验证预测结果是否与原始图形有足够的相似性
+            const isValid = validateShapePrediction(currentStrokePoints, predicted, 0.3);
+            
+            if (isValid) {
+              displayPoints = predicted;
+            } else {
+              // 相似性检查失败，回退到平滑模式
+              console.log('Prediction failed similarity check, falling back to smooth mode');
+              const chaikinPoints = smoothStrokeEnhanced(currentStrokePoints, {
+                enableDistanceFilter: true,
+                distanceThreshold: 3,
+                enableChaikin: true,
+                chaikinIterations: 2,
+              });
+              displayPoints = smoothStrokeCatmullRom(chaikinPoints, {
+                tension: 0.5,
+                segmentCount: 10
+              });
+            }
+          } else {
+            // Fall back to smooth mode if prediction fails
+            const chaikinPoints = smoothStrokeEnhanced(currentStrokePoints, {
+              enableDistanceFilter: true,
+              distanceThreshold: 3,
+              enableChaikin: true,
+              chaikinIterations: 2,
+            });
+            displayPoints = smoothStrokeCatmullRom(chaikinPoints, {
+              tension: 0.5,
+              segmentCount: 10
+            });
+          }
+          break;
+        }
+
+        default:
+          displayPoints = currentStrokePoints;
       }
 
       const stroke: Stroke = {
@@ -2283,6 +2344,17 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       };
 
       store.addStroke(stroke);
+      
+      // 保存最后一次绘制的原始数据（用于 Undo Predict）
+      if (store.strokeMode === 'predict') {
+        store.setLastStrokeOriginalData({
+          id: stroke.id,
+          originalPoints: currentStrokePoints, // 保存最原始的绘制点（有抖动）
+          simplifiedPoints: simplifiedPoints, // 保存简化后的点
+          displayPoints: displayPoints,
+        });
+      }
+      
       onStrokeComplete?.(stroke);
     }
 

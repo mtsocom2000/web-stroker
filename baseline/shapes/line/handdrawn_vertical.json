@@ -1,0 +1,56 @@
+{
+  "version": "1.0.0",
+  "timestamp": 1710240000002,
+  "description": "Hand-drawn vertical line with slight wobble",
+  "expectedShape": "line",
+  "tags": ["handdrawn", "vertical"],
+  "canvasState": {
+    "strokes": [
+      {
+        "id": "handdrawn_vertical_001",
+        "points": [
+          {"x": 100, "y": 50, "timestamp": 1000},
+          {"x": 99, "y": 54, "timestamp": 1016},
+          {"x": 101, "y": 58, "timestamp": 1032},
+          {"x": 100, "y": 62, "timestamp": 1048},
+          {"x": 102, "y": 66, "timestamp": 1064},
+          {"x": 99, "y": 70, "timestamp": 1080},
+          {"x": 100, "y": 74, "timestamp": 1096},
+          {"x": 101, "y": 78, "timestamp": 1112},
+          {"x": 100, "y": 82, "timestamp": 1128},
+          {"x": 98, "y": 86, "timestamp": 1144},
+          {"x": 100, "y": 90, "timestamp": 1160},
+          {"x": 101, "y": 94, "timestamp": 1176},
+          {"x": 99, "y": 98, "timestamp": 1192},
+          {"x": 100, "y": 102, "timestamp": 1208},
+          {"x": 102, "y": 106, "timestamp": 1224},
+          {"x": 100, "y": 110, "timestamp": 1240},
+          {"x": 98, "y": 114, "timestamp": 1256},
+          {"x": 100, "y": 118, "timestamp": 1272},
+          {"x": 101, "y": 122, "timestamp": 1288},
+          {"x": 100, "y": 126, "timestamp": 1304},
+          {"x": 99, "y": 130, "timestamp": 1320},
+          {"x": 100, "y": 134, "timestamp": 1336},
+          {"x": 102, "y": 138, "timestamp": 1352},
+          {"x": 100, "y": 142, "timestamp": 1368},
+          {"x": 101, "y": 146, "timestamp": 1384},
+          {"x": 100, "y": 150, "timestamp": 1400}
+        ],
+        "smoothedPoints": [
+          {"x": 100, "y": 50},
+          {"x": 100, "y": 150}
+        ],
+        "color": "#000000",
+        "thickness": 2,
+        "timestamp": 1000,
+        "strokeType": "artistic"
+      }
+    ],
+    "canvasWidth": 200,
+    "canvasHeight": 200,
+    "zoom": 1,
+    "panX": 0,
+    "panY": 0,
+    "strokeMode": "original"
+  }
+}

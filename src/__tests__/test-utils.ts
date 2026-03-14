@@ -273,7 +273,7 @@ export function createTestStore() {
         };
       }),
 
-    updateStroke: (id, stroke, skipHistory?: boolean) =>
+    updateStroke: (id, stroke, _skipHistory?: boolean) =>
       set((state) => {
         const newStrokes = state.strokes.map((s) => (s.id === id ? stroke : s));
         return {

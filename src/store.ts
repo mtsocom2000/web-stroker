@@ -3,6 +3,9 @@ import type { Stroke, CanvasState, DigitalSegment, ToolCategory, ArtisticTool, D
 import type { BrushType, BrushSettings } from './brush/presets';
 import type { FillRegion } from './fillRegion';
 
+/** Stroke processing mode: original, smooth, or predict */
+export type StrokeMode = 'original' | 'smooth' | 'predict';
+
 const DEFAULT_PIXELS_PER_UNIT: Record<LengthUnit, number> = {
   mm: 3.78,
   cm: 37.8,
@@ -130,13 +133,9 @@ interface DrawingState {
   setColor: (color: string) => void;
   setThickness: (thickness: number) => void;
 
-  // Predict (shape detection)
-  predictEnabled: boolean;
-  setPredictEnabled: (enabled: boolean) => void;
-
-  // Smooth (stroke smoothing) - legacy
-  smoothEnabled: boolean;
-  setSmoothEnabled: (enabled: boolean) => void;
+  // Stroke mode: original, smooth, or predict
+  strokeMode: StrokeMode;
+  setStrokeMode: (mode: StrokeMode) => void;
 
   // Snap (digital mode snapping)
   snapEnabled: boolean;
@@ -158,6 +157,11 @@ interface DrawingState {
   pushHistory: (state: CanvasState) => void;
   undo: () => void;
   redo: () => void;
+
+  // Undo Predict - 恢复最后一次绘制的预测
+  lastStrokeOriginalData: { id: string; originalPoints: Point[]; simplifiedPoints?: Point[]; displayPoints?: Point[] } | null;
+  setLastStrokeOriginalData: (data: { id: string; originalPoints: Point[]; simplifiedPoints?: Point[]; displayPoints?: Point[] } | null) => void;
+  undoLastPredict: () => boolean;
 }
 
 export const useDrawingStore = create<DrawingState>((set) => {
@@ -168,8 +172,7 @@ export const useDrawingStore = create<DrawingState>((set) => {
     zoom: 1,
     panX: 0,
     panY: 0,
-    predictEnabled: false,
-    smoothEnabled: true,
+    strokeMode: 'smooth',
   };
 
   const defaultBrushSettings: BrushSettings = {
@@ -266,8 +269,7 @@ export const useDrawingStore = create<DrawingState>((set) => {
     panY: 0,
     currentColor: '#000000',
     currentThickness: 2,
-    predictEnabled: false,
-    smoothEnabled: true,
+    strokeMode: 'smooth',
     snapEnabled: true,
     snapThreshold: 10,
     selectedStrokeIds: [],
@@ -276,6 +278,60 @@ export const useDrawingStore = create<DrawingState>((set) => {
 
     currentBrushType: 'pencil',
     currentBrushSettings: defaultBrushSettings,
+
+    // Undo Predict state
+    lastStrokeOriginalData: null,
+    setLastStrokeOriginalData: (data) => set({ lastStrokeOriginalData: data }),
+    undoLastPredict: () => {
+      let success = false;
+      set((state) => {
+        if (!state.lastStrokeOriginalData) {
+          return state;
+        }
+        
+        const { id, originalPoints } = state.lastStrokeOriginalData;
+        const strokeIndex = state.strokes.findIndex((s) => s.id === id);
+        
+        if (strokeIndex === -1) {
+          return { ...state, lastStrokeOriginalData: null };
+        }
+        
+        // 恢复到原始绘制数据：使用最原始的 points（有抖动）
+        const stroke = state.strokes[strokeIndex];
+        const updatedStroke: Stroke = {
+          ...stroke,
+          points: originalPoints, // 恢复最原始的绘制点（有抖动）
+          smoothedPoints: originalPoints, // 也恢复为原始点，不要保留规整后的
+          displayPoints: undefined, // 清除预测结果
+          cornerPoints: undefined, // 清除角点数据
+          cornerIndices: undefined,
+          segments: undefined,
+        };
+        
+        const newStrokes = [...state.strokes];
+        newStrokes[strokeIndex] = updatedStroke;
+        
+        // 同时更新 history
+        const newHistory = state.history.slice(0, state.historyIndex + 1);
+        newHistory.push({
+          strokes: newStrokes,
+          canvasWidth: state.canvasWidth,
+          canvasHeight: state.canvasHeight,
+          zoom: state.zoom,
+          panX: state.panX,
+          panY: state.panY,
+        });
+        
+        success = true;
+        return {
+          strokes: newStrokes,
+          history: newHistory,
+          historyIndex: newHistory.length - 1,
+          lastStrokeOriginalData: null, // 清除已恢复的数据
+        };
+      });
+      return success;
+    },
 
     // Mode
     setMode: (mode) => set({ mode }),
@@ -292,8 +348,6 @@ export const useDrawingStore = create<DrawingState>((set) => {
           zoom: state.zoom,
           panX: state.panX,
           panY: state.panY,
-          predictEnabled: state.predictEnabled,
-          smoothEnabled: state.smoothEnabled,
         });
         return {
           strokes: newStrokes,
@@ -314,8 +368,6 @@ export const useDrawingStore = create<DrawingState>((set) => {
           zoom: state.zoom,
           panX: state.panX,
           panY: state.panY,
-          predictEnabled: state.predictEnabled,
-          smoothEnabled: state.smoothEnabled,
         });
         return {
           strokes: newStrokes,
@@ -343,8 +395,6 @@ export const useDrawingStore = create<DrawingState>((set) => {
           zoom: state.zoom,
           panX: state.panX,
           panY: state.panY,
-          predictEnabled: state.predictEnabled,
-          smoothEnabled: state.smoothEnabled,
         });
         return {
           strokes: newStrokes,
@@ -363,8 +413,6 @@ export const useDrawingStore = create<DrawingState>((set) => {
           zoom: _state.zoom,
           panX: _state.panX,
           panY: _state.panY,
-          predictEnabled: _state.predictEnabled,
-          smoothEnabled: _state.smoothEnabled,
         });
         return {
           strokes: [],
@@ -389,8 +437,6 @@ export const useDrawingStore = create<DrawingState>((set) => {
           zoom: state.zoom,
           panX: state.panX,
           panY: state.panY,
-          predictEnabled: state.predictEnabled,
-          smoothEnabled: state.smoothEnabled,
         });
         return {
           strokes: newStrokes,
@@ -443,8 +489,6 @@ export const useDrawingStore = create<DrawingState>((set) => {
           zoom: state.zoom,
           panX: state.panX,
           panY: state.panY,
-          predictEnabled: state.predictEnabled,
-          smoothEnabled: state.smoothEnabled,
         });
         return {
           strokes: newStrokes,
@@ -462,8 +506,7 @@ export const useDrawingStore = create<DrawingState>((set) => {
 
     setPan: (panX, panY) => set({ panX, panY }),
 
-    setPredictEnabled: (enabled) => set({ predictEnabled: enabled }),
-    setSmoothEnabled: (enabled) => set({ smoothEnabled: enabled }),
+    setStrokeMode: (mode) => set({ strokeMode: mode }),
     setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
     setSnapThreshold: (threshold) => set({ snapThreshold: threshold }),
 
@@ -519,7 +562,7 @@ export const useDrawingStore = create<DrawingState>((set) => {
             zoom: previousState.zoom,
             panX: previousState.panX,
             panY: previousState.panY,
-            predictEnabled: previousState.predictEnabled ?? state.predictEnabled,
+            strokeMode: previousState.strokeMode ?? state.strokeMode,
             historyIndex: state.historyIndex - 1,
           };
         }
@@ -537,7 +580,7 @@ export const useDrawingStore = create<DrawingState>((set) => {
             zoom: nextState.zoom,
             panX: nextState.panX,
             panY: nextState.panY,
-            predictEnabled: nextState.predictEnabled ?? state.predictEnabled,
+            strokeMode: nextState.strokeMode ?? state.strokeMode,
             historyIndex: state.historyIndex + 1,
           };
         }
