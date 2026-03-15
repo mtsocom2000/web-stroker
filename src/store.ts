@@ -99,6 +99,7 @@ interface DrawingState {
   removeStroke: (id: string) => void;
   updateStroke: (id: string, stroke: Stroke, skipHistory?: boolean) => void;
   updateStrokes: (strokes: { id: string; stroke: Stroke }[]) => void;
+  updateStrokePoints: (id: string, points: Point[]) => void; // For animation replay
   clearStrokes: () => void;
   
   // Digital segments (helper - get all digital segments from strokes)
@@ -157,6 +158,10 @@ interface DrawingState {
   pushHistory: (state: CanvasState) => void;
   undo: () => void;
   redo: () => void;
+
+  // Animation Replay State
+  isAnimationReplay: boolean;
+  setAnimationReplay: (enabled: boolean) => void;
 
   // Undo Predict - 恢复最后一次绘制的预测
   lastStrokeOriginalData: { id: string; originalPoints: Point[]; simplifiedPoints?: Point[]; displayPoints?: Point[] } | null;
@@ -403,6 +408,21 @@ export const useDrawingStore = create<DrawingState>((set) => {
         };
       }),
 
+    updateStrokePoints: (id: string, points: Point[]) =>
+      set((state) => {
+        const strokeIndex = state.strokes.findIndex((s) => s.id === id);
+        if (strokeIndex === -1) return state;
+        
+        // Create new strokes array to trigger React re-render
+        const newStrokes = [...state.strokes];
+        newStrokes[strokeIndex] = {
+          ...newStrokes[strokeIndex],
+          points: [...points],
+        };
+        
+        return { strokes: newStrokes };
+      }),
+
     clearStrokes: () =>
       set((_state) => {
         const newHistory = _state.history.slice(0, _state.historyIndex + 1);
@@ -586,6 +606,10 @@ export const useDrawingStore = create<DrawingState>((set) => {
         }
         return state;
       }),
+
+    // Animation Replay
+    isAnimationReplay: false,
+    setAnimationReplay: (enabled) => set({ isAnimationReplay: enabled }),
 
     // Helper to get all digital segments from strokes
     getDigitalSegments: () => {

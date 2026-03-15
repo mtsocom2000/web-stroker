@@ -1,8 +1,9 @@
 {
   "version": "1.0.0",
   "timestamp": 1710240005000,
-  "description": "Obtuse triangle drawn counter-clockwise (one angle > 90°)",
-  "expectedShape": "triangle",
+  "description": "Quadrilateral shape with 4 corners (originally thought to be obtuse triangle)",
+  "expectedShape": "polygon",
+  "tags": ["polygon", "quadrilateral"],
   "canvasState": {
     "strokes": [
       {

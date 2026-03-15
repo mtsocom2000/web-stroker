@@ -98,7 +98,7 @@ function scoreLine(points: Point[], features: ShapeFeatures): ShapeScore {
   
   // 计算直线度评分
   let score = 0;
-  let reasons: string[] = [];
+  const reasons: string[] = [];
   
   // 顶点数评分（越少越好）
   if (cornerCount === 0) {
@@ -144,7 +144,7 @@ function scoreAngle(_points: Point[], features: ShapeFeatures): ShapeScore {
   const cornerCount = features.corners.length;
   
   let score = 0;
-  let reasons: string[] = [];
+  const reasons: string[] = [];
   
   // 必须不是封闭图形
   if (features.isClosed) {
@@ -189,7 +189,7 @@ function scoreTriangle(_points: Point[], features: ShapeFeatures): ShapeScore {
   const cornerCount = features.corners.length;
   
   let score = 0;
-  let reasons: string[] = [];
+  const reasons: string[] = [];
   
   // 必须封闭
   if (!features.isClosed) {
@@ -233,7 +233,7 @@ function scoreRectangle(_points: Point[], features: ShapeFeatures): ShapeScore {
   const cornerCount = features.corners.length;
   
   let score = 0;
-  let reasons: string[] = [];
+  const reasons: string[] = [];
   
   // 必须封闭
   if (!features.isClosed) {
@@ -283,7 +283,7 @@ function scoreSquare(_points: Point[], features: ShapeFeatures): ShapeScore {
   }
   
   let score = rectScore.score * 0.7; // 继承矩形评分的一部分
-  let reasons: string[] = ['基本符合矩形特征'];
+  const reasons: string[] = ['基本符合矩形特征'];
   
   // 宽高比评分（正方形宽高比≈1）
   const ratio = features.bbox.aspectRatio;
@@ -310,7 +310,7 @@ function scoreSquare(_points: Point[], features: ShapeFeatures): ShapeScore {
  */
 function scoreCircle(_points: Point[], features: ShapeFeatures): ShapeScore {
   let score = 0;
-  let reasons: string[] = [];
+  const reasons: string[] = [];
   
   // 必须封闭
   if (!features.isClosed) {
@@ -375,7 +375,7 @@ function scoreEllipse(_points: Point[], features: ShapeFeatures): ShapeScore {
   }
   
   let score = circleScore.score * 0.7; // 继承圆形评分的一部分
-  let reasons: string[] = ['基本符合圆形特征'];
+  const reasons: string[] = ['基本符合圆形特征'];
   
   const bbox = features.bbox;
   const ratio = bbox.aspectRatio;
@@ -403,7 +403,7 @@ function scoreEllipse(_points: Point[], features: ShapeFeatures): ShapeScore {
  */
 function scoreArc(_points: Point[], features: ShapeFeatures): ShapeScore {
   let score = 0;
-  let reasons: string[] = [];
+  const reasons: string[] = [];
   
   // 圆弧不应该是完全封闭的
   if (features.isClosed && features.closedDistance < features.bbox.width * 0.1) {
@@ -471,7 +471,7 @@ function scorePolygon(_points: Point[], features: ShapeFeatures): ShapeScore {
   const cornerCount = features.corners.length;
   
   let score = 0;
-  let reasons: string[] = [];
+  const reasons: string[] = [];
   
   if (cornerCount >= 5) {
     score += 0.6;

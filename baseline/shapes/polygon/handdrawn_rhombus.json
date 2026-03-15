@@ -1,6 +1,9 @@
 {
   "version": "1.0.0",
   "timestamp": 1773329842498,
+  "description": "Hand-drawn quadrilateral without right angles",
+  "expectedShape": "polygon",
+  "tags": ["handdrawn", "quadrilateral", "polygon"],
   "canvasState": {
     "strokes": [
       {

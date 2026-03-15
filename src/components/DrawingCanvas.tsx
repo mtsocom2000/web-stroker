@@ -282,7 +282,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     return { point, snap: currentSnapRef.current };
   }, [store.snapEnabled, store.snapThreshold, store.toolCategory, store.digitalMode]);
 
-  const render = useCallback(() => {
+  const render = useCallback((strokesToRender?: Stroke[]) => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (!canvas || !ctx) return;
@@ -578,7 +578,10 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       }
     }
     
-    strokesRef.current.forEach((stroke) => {
+    // Use provided strokes for animation replay, otherwise use store.strokes
+    const currentStrokes = strokesToRender ?? store.strokes;
+    
+    currentStrokes.forEach((stroke) => {
       if (stroke.strokeType !== 'digital' || !stroke.digitalSegments) return;
       
       stroke.digitalSegments.forEach((segment, segIdx) => {
@@ -871,9 +874,13 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       }
     }
 
-    strokesRef.current.forEach((stroke) => {
+    // Use provided strokes for animation replay, otherwise use store.strokes
+    const strokes = strokesToRender ?? store.strokes;
+    
+    strokes.forEach((stroke) => {
       if (stroke.strokeType === 'digital') return; // Skip digital strokes
-      const points = stroke.displayPoints ?? stroke.smoothedPoints;
+      // During animation replay, use points directly; otherwise use displayPoints/smoothedPoints
+      const points = strokesToRender ? stroke.points : (stroke.displayPoints ?? stroke.smoothedPoints);
       if (points.length < 2) return;
       const opacity = stroke.brushSettings?.opacity ?? 1;
       drawStroke(ctx, points, stroke.color, stroke.thickness, worldToScreen, opacity);
@@ -882,7 +889,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     if (currentStrokePoints.length > 1) {
       drawStroke(ctx, currentStrokePoints, store.currentColor, store.currentBrushSettings.size, worldToScreen, store.currentBrushSettings.opacity);
     }
-  }, [currentStrokePoints, store.currentColor, store.currentBrushSettings.size, store.currentBrushSettings.opacity, worldToScreen, store.toolCategory, store.digitalMode, store.digitalTool, store.mode, hoveredDigitalElement, selectedDigitalElements, digitalLinePoints, digitalLinePreviewEnd, circleCenter, circleRadiusPoint, circlePoints, arcPoints, arcRadiusPoint, curvePoints, store.circleCreationMode, lastMousePosRef]);
+  }, [currentStrokePoints, store.currentColor, store.currentBrushSettings.size, store.currentBrushSettings.opacity, worldToScreen, store.toolCategory, store.digitalMode, store.digitalTool, store.mode, hoveredDigitalElement, selectedDigitalElements, digitalLinePoints, digitalLinePreviewEnd, circleCenter, circleRadiusPoint, circlePoints, arcPoints, arcRadiusPoint, curvePoints, store.circleCreationMode, lastMousePosRef, store.strokes]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -903,7 +910,13 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     window.addEventListener('resize', resize);
 
     const animate = () => {
-      render();
+      // Only use animation replay mode when explicitly enabled
+      if (store.isAnimationReplay) {
+        const currentStrokes = useDrawingStore.getState().strokes;
+        render(currentStrokes);
+      } else {
+        render();
+      }
       animationFrameRef.current = requestAnimationFrame(animate);
     };
     animate();

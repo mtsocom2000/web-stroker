@@ -93,7 +93,7 @@ export function computeAngles(points: Point[], step: number = 3): AngleResult[] 
  * @param minDistance 合并距离阈值（默认20像素）
  * @returns 转角超过阈值的顶点
  */
-export function findCorners(angles: AngleResult[], points: Point[], _threshold: number = Math.PI * 0.4, minDistanceRatio: number = 0.05): AngleResult[] {
+export function findCorners(angles: AngleResult[], points: Point[], _threshold: number = Math.PI * 0.4, minDistanceRatio: number = 0.025): AngleResult[] {
   // Determine adaptive thresholds based on shape characteristics
   const xs = points.map(p => p.x);
   const ys = points.map(p => p.y); 
@@ -123,7 +123,7 @@ export function findCorners(angles: AngleResult[], points: Point[], _threshold: 
 
 
   // 计算相对距离阈值（基于包围盒大小）
-  const minDistance = Math.max(20, bboxSize * minDistanceRatio);
+  const minDistance = Math.max(10, bboxSize * minDistanceRatio);
   
   // For simple shapes (fewer corners): avoid excessive merging, may need more sensitive approach
   // If overall number of corners is small, we don't want to merge corners that are nearby, so keep original detection logic
@@ -264,10 +264,10 @@ export function computePathLength(points: Point[]): number {
  * 检测轨迹是否封闭
  * 
  * @param points 轨迹点
- * @param thresholdRatio 距离阈值比例（默认0.2，即包围盒宽度的20%）
+ * @param thresholdRatio 距离阈值比例（默认0.25，即包围盒宽度的25%，更宽松）
  * @returns 是否封闭及首尾距离
  */
-export function detectClosedShape(points: Point[], thresholdRatio: number = 0.2): { isClosed: boolean; distance: number } {
+export function detectClosedShape(points: Point[], thresholdRatio: number = 0.25): { isClosed: boolean; distance: number } {
   if (points.length < 3) {
     return { isClosed: false, distance: Infinity };
   }
@@ -277,10 +277,29 @@ export function detectClosedShape(points: Point[], thresholdRatio: number = 0.2)
   const distance = Math.hypot(start.x - end.x, start.y - end.y);
   
   const bbox = getBoundingBox(points);
-  const threshold = bbox.width * thresholdRatio;
+  const bboxSize = Math.max(bbox.width, bbox.height);
+  
+  // Use bbox-based threshold
+  const threshold = bboxSize * thresholdRatio;
+  
+  // Also check relative to path length - if distance is small compared to path length,
+  // it's likely a closed shape with a small gap
+  const pathLength = computePathLength(points);
+  const relativeThreshold = pathLength * 0.08; // 8% of path length
+  
+  // NEW: Check if distance is small relative to bounding box size
+  // This handles cases where start and end points are close but bbox is large
+  const relativeToBbox = bboxSize > 0 ? distance / bboxSize : 1;
+  const isClosedByRelativeBbox = relativeToBbox < 0.10; // 10% of bbox size
+  
+  // Shape is considered closed if either:
+  // 1. Distance is below bbox-based threshold
+  // 2. Distance is below path-length-based threshold (for large shapes with small gaps)
+  // 3. Distance is small relative to bbox size (for shapes like triangles with small gaps)
+  const isClosed = distance < threshold || distance < relativeThreshold || isClosedByRelativeBbox;
   
   return {
-    isClosed: distance < threshold,
+    isClosed,
     distance,
   };
 }
@@ -323,19 +342,42 @@ export function analyzeShapeFeatures(points: Point[]): ShapeFeatures {
       const cos = (v1.x * v2.x + v1.y * v2.y) / (len1 * len2);
       const startAngle = Math.acos(Math.min(1, Math.max(-1, cos)));
       
-      // Use same threshold as findCorners for closed shapes
-      const threshold = Math.PI * 0.18;
+      // Use a lower threshold for the start point corner to catch shallow angles
+      // Some triangles have very shallow angles at the start/end junction
+      const threshold = Math.PI * 0.08; // ~14.4 degrees, more sensitive
       
       if (startAngle > threshold) {
         // Check if this corner is far enough from existing corners
-        const minDistance = Math.max(20, Math.max(
+        const minDistance = Math.max(10, Math.max(
           Math.max(...points.map(p => p.x)) - Math.min(...points.map(p => p.x)),
           Math.max(...points.map(p => p.y)) - Math.min(...points.map(p => p.y))
-        ) * 0.05);
+        ) * 0.025);
         
         const isFarEnough = corners.every(c => {
           const dist = Math.hypot(points[c.index].x - pStart.x, points[c.index].y - pStart.y);
           return dist > minDistance * 0.5; // Slightly relaxed distance check
+        });
+        
+        if (isFarEnough) {
+          corners = [...corners, { index: 0, angle: startAngle }];
+          // Re-sort by index
+          corners.sort((a, b) => a.index - b.index);
+        }
+      }
+      
+      // Special case: if we have exactly 2 corners in a closed shape, 
+      // we likely missed the corner at the start/end junction (e.g., a triangle with shallow angle)
+      // Force add the start point as a corner
+      if (corners.length === 2) {
+        // Check if start point is far enough from existing corners
+        const minDistance = Math.max(10, Math.max(
+          Math.max(...points.map(p => p.x)) - Math.min(...points.map(p => p.x)),
+          Math.max(...points.map(p => p.y)) - Math.min(...points.map(p => p.y))
+        ) * 0.025);
+        
+        const isFarEnough = corners.every(c => {
+          const dist = Math.hypot(points[c.index].x - pStart.x, points[c.index].y - pStart.y);
+          return dist > minDistance * 0.3; // Very relaxed check
         });
         
         if (isFarEnough) {
