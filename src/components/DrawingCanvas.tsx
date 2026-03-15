@@ -10,6 +10,8 @@ import { ClosedAreaManager } from '../fillRegion';
 import { IntersectionManager } from '../intersection/IntersectionManager';
 import { formatLength, formatAngle, formatArea, getAcuteAngle, distance as calcDistance, angleBetween, findBestSnapPoint, type SnapResult, pixelsToUnit, findLineIntersection, checkParallelLines, lineCircleIntersections, closestPointOnSegment } from '../measurements';
 import { chooseIntersectionByMouseAngle } from '../utils/angleHelpers';
+import type { Renderer } from '../renderers/Renderer';
+import { Canvas2DRenderer, WebGLRenderer } from '../renderers';
 import './DrawingCanvas.css';
 
 interface CanvasProps {
@@ -19,6 +21,7 @@ interface CanvasProps {
 export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rendererRef = useRef<Renderer | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const closedAreaManagerRef = useRef<ClosedAreaManager | null>(null);
 
@@ -184,6 +187,10 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
   useEffect(() => {
     panRef.current = { x: store.panX, y: store.panY, zoom: store.zoom };
+    // Sync view state with renderer
+    if (rendererRef.current) {
+      rendererRef.current.setViewState(store.zoom, store.panX, store.panY);
+    }
   }, [store.panX, store.panY, store.zoom]);
 
   useEffect(() => {
@@ -294,10 +301,15 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.scale(dpr, dpr);
 
+    // When using Three.js renderer, clear with transparent to let WebGL show through
+    // Always render 2D canvas elements (background, grid, UI, measurements)
+    // Strokes are rendered by Three.js, but UI elements stay in 2D
     ctx.fillStyle = '#f8f9fa';
     ctx.fillRect(0, 0, width, height);
 
     const { toolCategory, pixelsPerUnit } = store;
+    
+    // Draw grid - always in 2D canvas for UI consistency
     drawGrid(ctx, width, height, panRef.current, toolCategory, pixelsPerUnit);
 
     // Draw snap indicator
@@ -562,7 +574,9 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       }
     }
 
-    // Draw digital strokes (lines, circles, curves)
+    // Draw digital strokes (lines, circles, curves) - ONLY in 2D mode
+    // In Three.js mode, digital strokes are rendered by Three.js
+    // But in Three.js mode, we still need to draw highlights via renderer
     const isInSelectMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') || 
                            (store.toolCategory === 'artistic' && store.mode === 'select');
     
@@ -578,13 +592,110 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       }
     }
     
-    // Use provided strokes for animation replay, otherwise use store.strokes
-    const currentStrokes = strokesToRender ?? store.strokes;
-    
-    currentStrokes.forEach((stroke) => {
-      if (stroke.strokeType !== 'digital' || !stroke.digitalSegments) return;
+    // In Three.js mode, draw highlights via renderer
+    if (store.renderer === 'threejs' && rendererRef.current && !strokesToRender) {
+      // Clear previous highlights
+      rendererRef.current.clearHighlights();
       
-      stroke.digitalSegments.forEach((segment, segIdx) => {
+      // Draw highlights for digital elements
+      store.strokes.forEach((stroke) => {
+        if (stroke.strokeType !== 'digital' || !stroke.digitalSegments) return;
+        
+        stroke.digitalSegments.forEach((segment, segIdx) => {
+          const isHovered = hoveredDigitalElement?.strokeId === stroke.id && 
+                          hoveredDigitalElement?.segmentIndex === segIdx;
+          
+          const isSelected = selectedDigitalElements.some(
+            sel => sel.strokeId === stroke.id && sel.segmentIndex === segIdx
+          );
+          
+          const isMeasureFirstLine = store.toolCategory === 'measure' && 
+                                     store.measureFirstLine?.strokeId === stroke.id && 
+                                     store.measureFirstLine?.segmentIndex === segIdx;
+          
+          const isMeasureSecondLine = store.toolCategory === 'measure' && 
+                                      store.measureSecondLine?.strokeId === stroke.id && 
+                                      store.measureSecondLine?.segmentIndex === segIdx;
+
+          const isMeasureRadiusArc = store.toolCategory === 'measure' &&
+                                     store.measureTool === 'radius' &&
+                                     store.measureFirstLine?.strokeId === stroke.id &&
+                                     store.measureFirstLine?.segmentIndex === segIdx;
+          
+          const isMeasureSelected = (isMeasureFirstLine || isMeasureSecondLine) && !!store.measureSecondLine;
+          const isPartOfHoveredArea = hoveredAreaStrokeIds.includes(stroke.id);
+          
+          // Only draw highlights if hovered, selected, or measure mode
+          if (!isHovered && !isSelected && !isMeasureFirstLine && !isMeasureSecondLine && !isPartOfHoveredArea) return;
+
+          if (segment.type === 'line') {
+            const highlightColor = (isMeasureFirstLine || isMeasureSecondLine) && !!store.measureSecondLine 
+              ? '#ff9800' 
+              : segment.color;
+            rendererRef.current!.highlightDigitalLine(
+              segment.points,
+              highlightColor,
+              isHovered || isPartOfHoveredArea ? 2 : 1,
+              isHovered || isPartOfHoveredArea,
+              isSelected || isMeasureSelected
+            );
+          } else if (segment.type === 'arc' && segment.arcData) {
+            const highlightColor = isMeasureRadiusArc ? '#ff9800' : segment.color;
+            rendererRef.current!.highlightDigitalArc(
+              segment.arcData,
+              highlightColor,
+              isHovered || isPartOfHoveredArea ? 2 : 1,
+              isHovered || isPartOfHoveredArea,
+              isSelected || isMeasureSelected
+            );
+          } else if (segment.type === 'bezier') {
+            rendererRef.current!.highlightDigitalBezier(
+              segment.points,
+              segment.color,
+              isHovered || isPartOfHoveredArea ? 2 : 1,
+              isHovered || isPartOfHoveredArea,
+              isSelected || isMeasureSelected
+            );
+          }
+
+          // Draw endpoint indicators
+          segment.points.forEach((point, pointIdx) => {
+            const isEndpoint = segment.type !== 'bezier' || pointIdx < 2;
+            const size = isEndpoint ? 6 : 4;
+            let color = '#2196f3';
+            if (isSelected) color = '#ff6b6b';
+            else if (isMeasureFirstLine || isMeasureSecondLine) color = '#ff9800';
+            else if (isPartOfHoveredArea) color = '#ff9800';
+            
+            if (isEndpoint) {
+              rendererRef.current!.drawEndpointIndicator(point, color, size);
+            } else {
+              rendererRef.current!.drawControlPointIndicator(point, color, size);
+            }
+          });
+        });
+      });
+      
+      // Draw intersection points (crosses) in select mode
+      if (isInSelectMode && store.toolCategory === 'digital' && !isDraggingDigital) {
+        const mousePos = lastMousePosRef.current;
+        if (mousePos) {
+          const nearbyIntersections = findNearbyIntersectionsWithSpatialIndex(mousePos, 30);
+          nearbyIntersections.forEach(int => {
+            rendererRef.current!.drawCrossIndicator(int.point, '#4caf50', 8 / store.zoom);
+          });
+        }
+      }
+    }
+    
+    // Use provided strokes for animation replay, otherwise use store.strokes
+    if (store.renderer !== 'threejs' || strokesToRender) {
+      const currentStrokes = strokesToRender ?? store.strokes;
+      
+      currentStrokes.forEach((stroke) => {
+        if (stroke.strokeType !== 'digital' || !stroke.digitalSegments) return;
+        
+        stroke.digitalSegments.forEach((segment, segIdx) => {
         const isHovered = hoveredDigitalElement?.strokeId === stroke.id && 
                         hoveredDigitalElement?.segmentIndex === segIdx;
         
@@ -684,6 +795,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         });
       }
     }
+    }
     
     // During drag, draw only the selected intersection if any
     if (isDraggingDigital && selectedIntersection) {
@@ -694,20 +806,28 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     // Draw digital line preview
     if (store.toolCategory === 'digital' && store.digitalMode === 'draw') {
       if (store.digitalTool === 'line' && digitalLinePoints.length > 0) {
-        // Draw existing segments
-        for (let i = 0; i < digitalLinePoints.length - 1; i++) {
-          drawDigitalLine(ctx, [digitalLinePoints[i], digitalLinePoints[i + 1]], store.currentColor, worldToScreen);
+        // Only draw segments in 2D if NOT using Three.js renderer
+        // Three.js handles stroke rendering via syncDigitalPreviews
+        if (store.renderer !== 'threejs') {
+          // Draw existing segments
+          for (let i = 0; i < digitalLinePoints.length - 1; i++) {
+            drawDigitalLine(ctx, [digitalLinePoints[i], digitalLinePoints[i + 1]], store.currentColor, worldToScreen);
+          }
+          
+          // Draw preview from last point to cursor
+          const lastPoint = digitalLinePoints[digitalLinePoints.length - 1];
+          if (digitalLinePreviewEnd) {
+            drawDigitalLinePreview(ctx, lastPoint, digitalLinePreviewEnd, store.currentColor, worldToScreen);
+          }
         }
         
-        // Draw start point indicator
+        // Draw start point indicator (always in 2D - UI element)
         const startScreen = worldToScreen(digitalLinePoints[0].x, digitalLinePoints[0].y);
         drawEndpointIndicator(ctx, startScreen, 6, '#2196f3');
         
-        // Draw preview from last point to cursor (always show when we have points)
+        // Draw measurements (always in 2D - UI elements)
         const lastPoint = digitalLinePoints[digitalLinePoints.length - 1];
         if (digitalLinePreviewEnd) {
-          drawDigitalLinePreview(ctx, lastPoint, digitalLinePreviewEnd, store.currentColor, worldToScreen);
-          
           // Draw distance measurement for preview line
           const distPx = calcDistance(lastPoint, digitalLinePreviewEnd);
           const distValue = distPx / store.pixelsPerUnit;
@@ -736,9 +856,13 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
           const centerScreen = worldToScreen(circleCenter.x, circleCenter.y);
           const radius = distance(circleCenter, circleRadiusPoint);
           const radiusScreen = Math.abs(radius * panRef.current.zoom);
-          drawDigitalCirclePreview(ctx, centerScreen, radiusScreen, store.currentColor);
           
-          // Draw radius measurement at midpoint of radius line
+          // Only draw circle in 2D if NOT using Three.js
+          if (store.renderer !== 'threejs') {
+            drawDigitalCirclePreview(ctx, centerScreen, radiusScreen, store.currentColor);
+          }
+          
+          // Draw radius measurement at midpoint of radius line (always in 2D)
           const radiusValue = radius / store.pixelsPerUnit;
           const labelPos = {
             x: centerScreen.x + radiusScreen / 2,
@@ -753,27 +877,33 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       
       // Three-point circle preview
       if (store.digitalTool === 'circle' && store.circleCreationMode === 'threePoint' && circlePoints.length > 0) {
+        // Only draw guide lines in 2D if NOT using Three.js
+        if (store.renderer !== 'threejs') {
+          // Draw guide lines
+          if (circlePoints.length >= 2) {
+            const p1 = worldToScreen(circlePoints[0].x, circlePoints[0].y);
+            const p2 = worldToScreen(circlePoints[1].x, circlePoints[1].y);
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.strokeStyle = store.currentColor;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+        }
+        
+        // Draw endpoint indicators (always in 2D)
         circlePoints.forEach((point) => {
           const screen = worldToScreen(point.x, point.y);
           drawEndpointIndicator(ctx, screen, 6, '#2196f3');
         });
-        // Draw guide lines
-        if (circlePoints.length >= 2) {
-          const p1 = worldToScreen(circlePoints[0].x, circlePoints[0].y);
-          const p2 = worldToScreen(circlePoints[1].x, circlePoints[1].y);
-          ctx.beginPath();
-          ctx.moveTo(p1.x, p1.y);
-          ctx.lineTo(p2.x, p2.y);
-          ctx.strokeStyle = store.currentColor;
-          ctx.lineWidth = 1;
-          ctx.setLineDash([4, 4]);
-          ctx.stroke();
-          ctx.setLineDash([]);
-        }
       }
 
       // Arc preview
       if (store.digitalTool === 'arc' && arcPoints.length > 0) {
+        // Draw endpoint indicators (always in 2D)
         arcPoints.forEach((point) => {
           const screen = worldToScreen(point.x, point.y);
           drawEndpointIndicator(ctx, screen, 6, '#2196f3');
@@ -782,17 +912,21 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         const previewPoint = arcRadiusPoint ?? mouseWorldRef.current;
 
         if (arcPoints.length === 1 && previewPoint) {
-          const p1 = worldToScreen(arcPoints[0].x, arcPoints[0].y);
-          const p2 = worldToScreen(previewPoint.x, previewPoint.y);
-          ctx.beginPath();
-          ctx.moveTo(p1.x, p1.y);
-          ctx.lineTo(p2.x, p2.y);
-          ctx.strokeStyle = store.currentColor;
-          ctx.lineWidth = 1;
-          ctx.setLineDash([6, 4]);
-          ctx.stroke();
-          ctx.setLineDash([]);
+          // Only draw line in 2D if NOT using Three.js
+          if (store.renderer !== 'threejs') {
+            const p1 = worldToScreen(arcPoints[0].x, arcPoints[0].y);
+            const p2 = worldToScreen(previewPoint.x, previewPoint.y);
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.strokeStyle = store.currentColor;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([6, 4]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
 
+          // Draw measurement (always in 2D)
           const distPx = calcDistance(arcPoints[0], previewPoint);
           const distValue = distPx / store.pixelsPerUnit;
           const midPoint = {
@@ -804,6 +938,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         }
 
         if (arcPoints.length >= 2 && previewPoint) {
+          // Draw measurement (always in 2D)
           const distPx = calcDistance(arcPoints[0], arcPoints[1]);
           const distValue = distPx / store.pixelsPerUnit;
           const midPoint = {
@@ -815,19 +950,23 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
           const arcData = computeArcDataFromThreePoints(arcPoints[0], arcPoints[1], previewPoint);
           if (arcData) {
-            drawDigitalArcPreview(ctx, arcData, store.currentColor, worldToScreen, panRef.current.zoom);
+            // Only draw arc preview in 2D if NOT using Three.js
+            if (store.renderer !== 'threejs') {
+              drawDigitalArcPreview(ctx, arcData, store.currentColor, worldToScreen, panRef.current.zoom);
 
-            const centerScreen = worldToScreen(arcData.center.x, arcData.center.y);
-            const previewScreen = worldToScreen(previewPoint.x, previewPoint.y);
-            ctx.beginPath();
-            ctx.moveTo(centerScreen.x, centerScreen.y);
-            ctx.lineTo(previewScreen.x, previewScreen.y);
-            ctx.strokeStyle = store.currentColor;
-            ctx.lineWidth = 1;
-            ctx.setLineDash([6, 4]);
-            ctx.stroke();
-            ctx.setLineDash([]);
+              const centerScreen = worldToScreen(arcData.center.x, arcData.center.y);
+              const previewScreen = worldToScreen(previewPoint.x, previewPoint.y);
+              ctx.beginPath();
+              ctx.moveTo(centerScreen.x, centerScreen.y);
+              ctx.lineTo(previewScreen.x, previewScreen.y);
+              ctx.strokeStyle = store.currentColor;
+              ctx.lineWidth = 1;
+              ctx.setLineDash([6, 4]);
+              ctx.stroke();
+              ctx.setLineDash([]);
+            }
 
+            // Draw radius measurement (always in 2D)
             const radiusValue = arcData.radius / store.pixelsPerUnit;
             const radiusMid = {
               x: (arcData.center.x + previewPoint.x) / 2,
@@ -841,35 +980,39 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       
       // Curve preview
       if (store.digitalTool === 'curve' && curvePoints.length > 0) {
+        // Draw control point indicators (always in 2D)
         curvePoints.forEach((point, i) => {
           const screen = worldToScreen(point.x, point.y);
           const isControl = i === 1 || i === 2;
           drawControlPointIndicator(ctx, screen, isControl ? 4 : 6, '#2196f3');
         });
         
-        // Draw guide lines between control points
-        if (curvePoints.length >= 2) {
-          for (let i = 0; i < curvePoints.length - 1; i++) {
-            const p1 = worldToScreen(curvePoints[i].x, curvePoints[i].y);
-            const p2 = worldToScreen(curvePoints[i + 1].x, curvePoints[i + 1].y);
-            ctx.beginPath();
-            ctx.moveTo(p1.x, p1.y);
-            ctx.lineTo(p2.x, p2.y);
-            ctx.strokeStyle = store.currentColor;
-            ctx.lineWidth = 1;
-            ctx.setLineDash([4, 4]);
-            ctx.stroke();
-            ctx.setLineDash([]);
+        // Only draw guide lines and curve in 2D if NOT using Three.js
+        if (store.renderer !== 'threejs') {
+          // Draw guide lines between control points
+          if (curvePoints.length >= 2) {
+            for (let i = 0; i < curvePoints.length - 1; i++) {
+              const p1 = worldToScreen(curvePoints[i].x, curvePoints[i].y);
+              const p2 = worldToScreen(curvePoints[i + 1].x, curvePoints[i + 1].y);
+              ctx.beginPath();
+              ctx.moveTo(p1.x, p1.y);
+              ctx.lineTo(p2.x, p2.y);
+              ctx.strokeStyle = store.currentColor;
+              ctx.lineWidth = 1;
+              ctx.setLineDash([4, 4]);
+              ctx.stroke();
+              ctx.setLineDash([]);
+            }
           }
-        }
-        
-        // Preview bezier curve when we have 3 points
-        if (curvePoints.length === 3 && lastMousePosRef.current) {
-          const p0 = curvePoints[0];
-          const p1 = curvePoints[1];
-          const p2 = curvePoints[2];
-          const p3 = lastMousePosRef.current;
-          drawDigitalBezier(ctx, [p0, p1, p2, p3], store.currentColor, worldToScreen, false, false);
+          
+          // Preview bezier curve when we have 3 points
+          if (curvePoints.length === 3 && lastMousePosRef.current) {
+            const p0 = curvePoints[0];
+            const p1 = curvePoints[1];
+            const p2 = curvePoints[2];
+            const p3 = lastMousePosRef.current;
+            drawDigitalBezier(ctx, [p0, p1, p2, p3], store.currentColor, worldToScreen, false, false);
+          }
         }
       }
     }
@@ -877,19 +1020,78 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     // Use provided strokes for animation replay, otherwise use store.strokes
     const strokes = strokesToRender ?? store.strokes;
     
-    strokes.forEach((stroke) => {
-      if (stroke.strokeType === 'digital') return; // Skip digital strokes
-      // During animation replay, use points directly; otherwise use displayPoints/smoothedPoints
-      const points = strokesToRender ? stroke.points : (stroke.displayPoints ?? stroke.smoothedPoints);
-      if (points.length < 2) return;
-      const opacity = stroke.brushSettings?.opacity ?? 1;
-      drawStroke(ctx, points, stroke.color, stroke.thickness, worldToScreen, opacity);
-    });
+    // Only render artistic strokes to 2D canvas when NOT using Three.js renderer
+    // Three.js renderer handles artistic strokes separately for better performance
+    if (store.renderer !== 'threejs' || strokesToRender) {
+      strokes.forEach((stroke) => {
+        if (stroke.strokeType === 'digital') return; // Skip digital strokes
+        // During animation replay, use points directly; otherwise use displayPoints/smoothedPoints
+        const points = strokesToRender ? stroke.points : (stroke.displayPoints ?? stroke.smoothedPoints);
+        if (points.length < 2) return;
+        const opacity = stroke.brushSettings?.opacity ?? 1;
+        drawStroke(ctx, points, stroke.color, stroke.thickness, worldToScreen, opacity);
+      });
 
-    if (currentStrokePoints.length > 1) {
-      drawStroke(ctx, currentStrokePoints, store.currentColor, store.currentBrushSettings.size, worldToScreen, store.currentBrushSettings.opacity);
+      if (currentStrokePoints.length > 1) {
+        drawStroke(ctx, currentStrokePoints, store.currentColor, store.currentBrushSettings.size, worldToScreen, store.currentBrushSettings.opacity);
+      }
     }
-  }, [currentStrokePoints, store.currentColor, store.currentBrushSettings.size, store.currentBrushSettings.opacity, worldToScreen, store.toolCategory, store.digitalMode, store.digitalTool, store.mode, hoveredDigitalElement, selectedDigitalElements, digitalLinePoints, digitalLinePreviewEnd, circleCenter, circleRadiusPoint, circlePoints, arcPoints, arcRadiusPoint, curvePoints, store.circleCreationMode, lastMousePosRef, store.strokes]);
+  }, [currentStrokePoints, store.currentColor, store.currentBrushSettings.size, store.currentBrushSettings.opacity, worldToScreen, store.toolCategory, store.digitalMode, store.digitalTool, store.mode, hoveredDigitalElement, selectedDigitalElements, digitalLinePoints, digitalLinePreviewEnd, circleCenter, circleRadiusPoint, circlePoints, arcPoints, arcRadiusPoint, curvePoints, store.circleCreationMode, lastMousePosRef, store.strokes, store.renderer]);
+
+  // Track current stroke for Three.js renderer
+  const currentStrokeRef = useRef(currentStrokePoints);
+  currentStrokeRef.current = currentStrokePoints;
+
+  // Sync digital previews to renderer
+  const syncDigitalPreviews = useCallback(() => {
+    if (!rendererRef.current) return;
+    
+    const renderer = rendererRef.current;
+    
+    // Clear existing previews first
+    renderer.clearDigitalPreviews();
+    
+    // Only sync if in digital mode
+    if (store.toolCategory !== 'digital') return;
+    
+    // Line preview - use polyline preview for complete rendering
+    if (store.digitalTool === 'line' && digitalLinePoints.length > 0) {
+      renderer.updateDigitalPolylinePreview(
+        digitalLinePoints, 
+        digitalLinePreviewEnd, 
+        store.currentColor, 
+        store.currentThickness
+      );
+    }
+    
+    // Circle preview
+    if (store.digitalTool === 'circle' && store.circleCreationMode === 'centerRadius' && circleCenter && circleRadiusPoint) {
+      const radius = distance(circleCenter, circleRadiusPoint);
+      renderer.updateDigitalCirclePreview(circleCenter, Math.abs(radius), store.currentColor, store.currentThickness);
+    }
+    
+    // Arc preview
+    if (store.digitalTool === 'arc' && arcPoints.length > 0) {
+      // Compute arc preview based on arc points
+      if (arcPoints.length === 2 && arcRadiusPoint) {
+        // Preview from first two points + mouse position
+        const center = arcPoints[0];
+        const radius = distance(arcPoints[0], arcPoints[1]) / 2;
+        // Simple arc preview - full circle for now
+        renderer.updateDigitalCirclePreview(center, radius, store.currentColor, store.currentThickness);
+      }
+    }
+    
+    // Curve preview
+    if (store.digitalTool === 'curve' && curvePoints.length >= 3 && lastMousePosRef.current) {
+      const allPoints = [...curvePoints, lastMousePosRef.current];
+      if (allPoints.length >= 4) {
+        // Use last 4 points for cubic bezier
+        const bezierPoints = allPoints.slice(-4);
+        renderer.updateDigitalBezierPreview(bezierPoints, store.currentColor, store.currentThickness);
+      }
+    }
+  }, [store.renderer, store.toolCategory, store.digitalTool, store.circleCreationMode, store.currentColor, store.currentThickness, digitalLinePoints, digitalLinePreviewEnd, circleCenter, circleRadiusPoint, arcPoints, arcRadiusPoint, curvePoints]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -898,18 +1100,58 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     const container = containerRef.current;
     if (!container) return;
 
+    // Initialize renderer based on store configuration
+    if (!rendererRef.current) {
+      if (store.renderer === 'threejs') {
+        rendererRef.current = new WebGLRenderer();
+      } else {
+        rendererRef.current = new Canvas2DRenderer();
+      }
+      rendererRef.current.initialize(container);
+      // Sync initial view state
+      rendererRef.current.setViewState(store.zoom, store.panX, store.panY);
+    }
+
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
       canvas.width = container.clientWidth * dpr;
       canvas.height = container.clientHeight * dpr;
       canvas.style.width = `${container.clientWidth}px`;
       canvas.style.height = `${container.clientHeight}px`;
+      
+      // Resize renderer if active
+      if (rendererRef.current) {
+        rendererRef.current.resize();
+      }
     };
 
     resize();
     window.addEventListener('resize', resize);
 
     const animate = () => {
+      // Sync strokes and update current stroke for renderer
+      if (rendererRef.current) {
+        // Add any new strokes to renderer
+        strokesRef.current.forEach(stroke => {
+          if (stroke.strokeType === 'digital') {
+            rendererRef.current!.addDigitalStroke(stroke);
+          } else {
+            rendererRef.current!.addStroke(stroke);
+          }
+        });
+        
+        // Always update current stroke (it's fast) and render
+        rendererRef.current.updateCurrentStroke(
+          currentStrokeRef.current,
+          store.currentColor,
+          store.currentBrushSettings.size,
+          store.currentBrushSettings.opacity
+        );
+        // Sync digital previews
+        syncDigitalPreviews();
+        rendererRef.current.render();
+      }
+      
       // Only use animation replay mode when explicitly enabled
       if (store.isAnimationReplay) {
         const currentStrokes = useDrawingStore.getState().strokes;
@@ -926,8 +1168,13 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
+      // Dispose renderer
+      if (rendererRef.current) {
+        rendererRef.current.dispose();
+        rendererRef.current = null;
+      }
     };
-  }, [render]);
+  }, [render, store.renderer, store.zoom, store.panX, store.panY]);
 
   const distanceToSegment = useCallback((point: { x: number; y: number }, segStart: Point, segEnd: Point): number => {
     const dx = segEnd.x - segStart.x;
@@ -1623,17 +1870,17 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
               color: store.currentColor,
             }];
             
-            const stroke: Stroke = {
-              id: generateId(),
-              points: [p0, p1, p2, p3],
-              smoothedPoints: [p0, p1, p2, p3],
-              color: store.currentColor,
-              thickness: 1,
-              timestamp: Date.now(),
-              strokeType: 'digital',
-              digitalSegments: segments,
-              isClosed: false,
-            };
+          const stroke: Stroke = {
+            id: generateId(),
+            points: [p0, p1, p2, p3],
+            smoothedPoints: [p0, p1, p2, p3],
+            color: store.currentColor,
+            thickness: 1,
+            timestamp: Date.now(),
+            strokeType: 'digital',
+            digitalSegments: segments,
+            isClosed: false,
+          };
             
             store.addStroke(stroke);
             return []; // Clear points

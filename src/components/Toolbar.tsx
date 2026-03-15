@@ -303,6 +303,29 @@ export const Toolbar: React.FC = () => {
         Load
       </button>
 
+      <div className="toolbar-divider" />
+
+      {/* Renderer Toggle - Phase 1: Feature flag for testing */}
+      <div className="toolbar-group">
+        <span className="mode-label">Renderer:</span>
+        <div className="mode-buttons">
+          <button
+            className={`mode-btn ${store.renderer === 'canvas2d' ? 'active' : ''}`}
+            onClick={() => store.setRenderer('canvas2d')}
+            title="Use Canvas 2D renderer (default)"
+          >
+            2D Canvas
+          </button>
+          <button
+            className={`mode-btn ${store.renderer === 'threejs' ? 'active' : ''}`}
+            onClick={() => store.setRenderer('threejs')}
+            title="Use Three.js renderer (experimental, better performance)"
+          >
+            Three.js
+          </button>
+        </div>
+      </div>
+
       {/* Replay Controls - always show when data is loaded */}
       {showReplayControls && (
         <>

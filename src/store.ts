@@ -167,6 +167,10 @@ interface DrawingState {
   lastStrokeOriginalData: { id: string; originalPoints: Point[]; simplifiedPoints?: Point[]; displayPoints?: Point[] } | null;
   setLastStrokeOriginalData: (data: { id: string; originalPoints: Point[]; simplifiedPoints?: Point[]; displayPoints?: Point[] } | null) => void;
   undoLastPredict: () => boolean;
+
+  // Renderer Configuration
+  renderer: 'canvas2d' | 'threejs';
+  setRenderer: (renderer: 'canvas2d' | 'threejs') => void;
 }
 
 export const useDrawingStore = create<DrawingState>((set) => {
@@ -610,6 +614,10 @@ export const useDrawingStore = create<DrawingState>((set) => {
     // Animation Replay
     isAnimationReplay: false,
     setAnimationReplay: (enabled) => set({ isAnimationReplay: enabled }),
+
+    // Renderer Configuration
+    renderer: 'canvas2d',
+    setRenderer: (renderer) => set({ renderer }),
 
     // Helper to get all digital segments from strokes
     getDigitalSegments: () => {

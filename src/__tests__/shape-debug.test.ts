@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it } from 'vitest';
 import { analyzeShapeFeatures } from '../predict/shapeAnalysis';
 import { classifyShapeImproved } from '../predict/improvedClassifier';
 import { loadBaselineStroke, getBaselineFiles } from './test-utils/baseline';

@@ -3,10 +3,10 @@
 ## 目录
 1. [应用架构概览](#应用架构概览)
 2. [状态管理系统](#状态管理系统)
-3. [绘制模式](#绘制模式)
-4. [形状预测流水线](#形状预测流水线)
-5. [数据流](#数据流)
-6. [Three.js渲染流水线](#threejs渲染流水线)
+3. [渲染系统架构](#渲染系统架构)
+4. [绘制模式](#绘制模式)
+5. [形状预测流水线](#形状预测流水线)
+6. [数据流](#数据流)
 7. [文件格式规范](#文件格式规范)
 8. [开发模式](#开发模式)
 
@@ -29,6 +29,11 @@ web-stroker/
 │   │   ├── Toolbar.tsx          # 工具栏界面
 │   │   ├── PropertyPanel.tsx    # 工具属性面板
 │   │   └── DrawToolPanel.tsx    # 绘制模式控制
+│   ├── renderers/          # 渲染系统 (Strategy Pattern)
+│   │   ├── Renderer.ts          # 渲染器接口定义
+│   │   ├── Canvas2DRenderer.ts  # Canvas 2D实现
+│   │   ├── WebGLRenderer.ts     # Three.js/WebGL实现
+│   │   └── index.ts             # 模块导出
 │   ├── predict/            # 形状预测系统
 │   │   ├── index.ts             # 主入口 & predictShape
 │   │   ├── shapeAnalysis.ts     # 形状特征分析
@@ -129,6 +134,244 @@ historyIndex: number
 - **批量操作**: 使用 `addStrokesBatch` 处理多个笔划
 - **历史集成**: 每次状态变更更新历史栈
 - **选择更新**: 只更新相关状态部分
+
+## 渲染系统架构
+
+### 设计原则 (Strategy Pattern)
+采用**策略模式**实现渲染系统抽象：
+- **DrawingCanvas** 依赖抽象的 `Renderer` 接口，而非具体实现
+- **Canvas2DRenderer** 和 **WebGLRenderer** 实现相同的接口
+- 运行时通过配置切换渲染器，无需修改 DrawingCanvas 代码
+- 消除条件判断 (`if (renderer === 'threejs')`)，符合开闭原则
+
+### 架构图
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     DrawingCanvas                           │
+│                    (React Component)                        │
+├─────────────────────────────────────────────────────────────┤
+│  • 事件处理 (鼠标/键盘)                                       │
+│  • 状态管理 (hooks)                                          │
+│  • 渲染协调                                                  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ 依赖接口
+┌─────────────────────────────────────────────────────────────┐
+│                      Renderer Interface                     │
+├─────────────────────────────────────────────────────────────┤
+│  Lifecycle: initialize(), dispose(), resize(), render()     │
+│  View State: setViewState(zoom, panX, panY)                 │
+│  Artistic: addStroke(), removeStroke(), clearStrokes()      │
+│  Digital: addDigitalStroke(), removeDigitalStroke()         │
+│  Previews: updateDigitalXxxPreview(), clearDigitalPreviews()│
+│  Highlights: highlightDigitalXxx(), drawXxxIndicator()      │
+│  Utilities: worldToScreen(), screenToWorld()                │
+└─────────────────────────────────────────────────────────────┘
+         │                                          │
+         ▼                                          ▼
+┌──────────────────────────┐          ┌──────────────────────────┐
+│   Canvas2DRenderer       │          │    WebGLRenderer         │
+│   (2D Canvas API)        │          │    (Three.js)            │
+├──────────────────────────┤          ├──────────────────────────┤
+│ • CanvasRenderingContext2D│          │ • THREE.Scene            │
+│ • 2D context 绘制         │          │ • THREE.WebGLRenderer    │
+│ • 简单几何绘制            │          │ • InstancedMesh 优化     │
+│ • 实时样式控制            │          │ • 硬件加速渲染           │
+└──────────────────────────┘          └──────────────────────────┘
+```
+
+### Renderer 接口详解
+
+#### 生命周期方法
+```typescript
+interface Renderer {
+  // 初始化
+  initialize(container: HTMLElement): void;
+  
+  // 清理资源
+  dispose(): void;
+  
+  // 响应容器尺寸变化
+  resize(): void;
+  
+  // 渲染一帧
+  render(): void;
+}
+```
+
+#### 视图状态管理
+```typescript
+// 设置视口状态 (zoom, pan)
+setViewState(zoom: number, panX: number, panY: number): void;
+
+// 坐标转换
+worldToScreen(point: Point): { x: number; y: number };
+screenToWorld(x: number, y: number): Point;
+```
+
+#### 艺术笔划渲染
+```typescript
+// 添加/移除/清空艺术笔划
+addStroke(stroke: Stroke): void;
+removeStroke(strokeId: string): void;
+clearStrokes(): void;
+
+// 更新当前正在绘制的笔划 (实时预览)
+updateCurrentStroke(
+  points: Point[], 
+  color: string, 
+  thickness: number, 
+  opacity: number
+): void;
+```
+
+#### 数字元素渲染
+```typescript
+// 添加/移除数字元素 (直线、圆、弧、曲线)
+addDigitalStroke(stroke: Stroke): void;
+removeDigitalStroke(strokeId: string): void;
+clearDigitalElements(): void;
+
+// 预览状态 (绘制过程中)
+updateDigitalLinePreview(start: Point, end: Point, ...): void;
+updateDigitalPolylinePreview(points: Point[], previewEnd: Point | null, ...): void;
+updateDigitalCirclePreview(center: Point, radius: number, ...): void;
+updateDigitalArcPreview(center: Point, radius: number, startAngle: number, endAngle: number, ...): void;
+updateDigitalBezierPreview(points: Point[], ...): void;
+clearDigitalPreviews(): void;
+```
+
+#### 高亮与选择指示器
+```typescript
+// 高亮数字元素 (悬停/选中效果)
+highlightDigitalLine(points: Point[], color: string, thickness: number, isHovered: boolean, isSelected: boolean): void;
+highlightDigitalArc(arcData: ArcData, color: string, thickness: number, isHovered: boolean, isSelected: boolean): void;
+highlightDigitalBezier(points: Point[], color: string, thickness: number, isHovered: boolean, isSelected: boolean): void;
+
+// 绘制指示器
+// - 端点指示器 (选中/悬停时显示)
+drawEndpointIndicator(point: Point, color: string, size: number): void;
+// - 控制点指示器 (贝塞尔曲线)
+drawControlPointIndicator(point: Point, color: string, size: number): void;
+// - 交点指示器 (绿色叉形)
+drawCrossIndicator(point: Point, color: string, size: number): void;
+
+// 清除所有高亮
+clearHighlights(): void;
+```
+
+### Canvas2DRenderer 实现
+
+**技术栈**: HTML5 Canvas 2D API
+
+**特点**:
+- 使用 `CanvasRenderingContext2D` 进行绘制
+- 每帧清空画布并重绘所有元素
+- 支持实时的样式变化 (线宽、颜色、虚线等)
+- 适合UI元素和辅助信息的渲染
+
+**核心方法**:
+```typescript
+class Canvas2DRenderer implements Renderer {
+  private ctx: CanvasRenderingContext2D | null = null;
+  private viewState: ViewState = { zoom: 1, panX: 0, panY: 0 };
+  
+  // 世界坐标转屏幕坐标
+  worldToScreen(point: Point): { x: number; y: number } {
+    return {
+      x: (point.x - this.viewState.panX) * this.viewState.zoom + width / 2,
+      y: height / 2 - (point.y - this.viewState.panY) * this.viewState.zoom
+    };
+  }
+  
+  // 绘制艺术笔划
+  addStroke(stroke: Stroke): void {
+    // 直接绘制到 canvas
+    this.drawStroke(stroke);
+  }
+}
+```
+
+### WebGLRenderer 实现
+
+**技术栈**: Three.js + WebGL
+
+**特点**:
+- 使用 `THREE.Scene` 和 `THREE.WebGLRenderer`
+- 增量渲染：只更新变更的物体
+- 使用 `InstancedMesh` 优化大量笔划渲染
+- 硬件加速，适合复杂场景
+
+**相机配置**:
+```typescript
+// 正交相机，视锥体基于容器尺寸
+const aspect = container.clientWidth / container.clientHeight;
+const frustumSize = container.clientHeight; // 关键：基于高度的1:1映射
+
+this.camera = new THREE.OrthographicCamera(
+  -frustumSize * aspect / 2 + panX,
+  frustumSize * aspect / 2 + panX,
+  frustumSize / 2 + panY,
+  -frustumSize / 2 + panY,
+  0.1,
+  1000
+);
+```
+
+**坐标系统一**:
+- Canvas2D 和 WebGL 使用相同的 `worldToScreen` / `screenToWorld` 逻辑
+- 相机视锥体尺寸与容器高度一致，确保 zoom=1 时 1:1 像素映射
+- Pan 偏移统一处理，避免坐标系错位
+
+**Z深度层级**:
+```
+z = -1.0  : 网格背景
+z =  0.0  : 参考平面
+z =  0.05 : 预览笔划/元素
+z =  0.1  : 最终笔划/元素
+z =  0.15 : 高亮效果
+z =  0.2  : 指示器 (端点、交点)
+```
+
+### 渲染器切换
+
+**配置存储**:
+```typescript
+// src/store.ts
+renderer: 'canvas2d' | 'threejs'  // 当前渲染器类型
+```
+
+**初始化流程**:
+```typescript
+// DrawingCanvas.tsx
+useEffect(() => {
+  if (!rendererRef.current) {
+    if (store.renderer === 'threejs') {
+      rendererRef.current = new WebGLRenderer();
+    } else {
+      rendererRef.current = new Canvas2DRenderer();
+    }
+    rendererRef.current.initialize(container);
+    rendererRef.current.setViewState(store.zoom, store.panX, store.panY);
+  }
+}, [store.renderer]);
+```
+
+**运行时切换**:
+- 用户通过 Toolbar 切换渲染器
+- 旧渲染器调用 `dispose()` 清理资源
+- 新渲染器初始化并同步当前状态
+
+### 渲染流程对比
+
+| 特性 | Canvas2DRenderer | WebGLRenderer |
+|------|------------------|---------------|
+| **渲染方式** | 每帧清空重绘 | 增量更新 |
+| **笔划添加** | 立即绘制到画布 | 创建 THREE.Object3D |
+| **高亮效果** | 实时样式变化 | 创建高亮 Mesh |
+| **性能特点** | 适合少量元素 | 适合大量元素 |
+| **内存管理** | 无需手动清理 | 需 dispose 几何体/材质 |
+| **坐标转换** | 手动计算 | 相机视锥体 |
 
 ## 绘制模式
 
@@ -352,39 +595,6 @@ const handleMouseUp = () => {
    测量工具    点击点    几何计算    数值显示
 ```
 
-## Three.js渲染流水线
-
-### 场景设置
-```typescript
-// 相机配置
-const camera = new THREE.OrthographicCamera(left, right, top, bottom, 0.1, 1000);
-camera.position.z = 10;
-
-// 场景层级
-const scene = new THREE.Scene();
-scene.add(gridHelper);      // 网格 z = -1
-scene.add(axisHelper);      // 坐标轴 z = -0.5
-scene.add(strokeLines);     // 笔划 z = 0.1
-scene.add(previewLine);     // 预览 z = 0.05
-```
-
-### 笔划渲染
-- **预览笔划**: TubeGeometry, z = 0.05, opacity = 0.6
-- **最终笔划**: TubeGeometry, z = 0.1, opacity = 1.0
-- **Tube几何**: 跨缩放级别保持一致的线宽
-- **材质复用**: 性能优化
-
-### 坐标系统
-1. **屏幕坐标**: 鼠标位置 (像素)
-2. **世界坐标**: 通过 `screenToWorld()` 转换
-3. **归一化坐标**: Three.js渲染使用
-
-### 相机管理
-- **宽高比校正**: 保持一致缩放
-- **缩放限制**: 0.5x 到 5.0x
-- **平移支持**: 相机位置调整
-- **大小调整**: 窗口resize事件监听
-
 ## 文件格式规范
 
 ### 绘制数据结构
@@ -501,12 +711,19 @@ const useDrawingStore = create<DrawingState>()((set, get) => ({
 }));
 ```
 
-### Three.js最佳实践
-1. **资源清理**: 总是销毁几何体和材质
-2. **单一渲染循环**: 每个组件使用一个requestAnimationFrame
-3. **坐标转换**: 一致使用 `screenToWorld()` 辅助函数
-4. **Z深度层级**: 保持一致的深度排序
-5. **几何更新**: 原地更新以避免闪烁
+### Renderer 最佳实践
+1. **接口编程**: DrawingCanvas 只依赖 Renderer 接口，不直接引用具体实现
+2. **无渲染器判断**: 不要在业务代码中使用 `if (renderer === 'threejs')` 判断
+3. **统一坐标系**: 使用 renderer.worldToScreen() 和 renderer.screenToWorld()
+4. **资源清理**: 切换渲染器时确保调用 dispose() 释放资源
+5. **状态同步**: zoom/pan 变化时及时同步到 renderer.setViewState()
+
+### 添加新渲染器
+1. 实现 `Renderer` 接口的所有方法
+2. 处理坐标转换与 Canvas2D/WebGL 保持一致
+3. 实现高亮和指示器方法
+4. 确保资源正确清理 (dispose)
+5. 在 `Toolbar` 中添加切换选项
 
 ### 错误处理
 - **优雅降级**: 处理Three.js上下文丢失
@@ -558,5 +775,5 @@ const useDrawingStore = create<DrawingState>()((set, get) => ({
 
 ---
 
-**版本**: 2026-03-14  
-**最新更新**: 形状预测流水线改进，添加假角点处理和3角点验证
+**版本**: 2026-03-15  
+**最新更新**: 添加双渲染器架构 (Strategy Pattern)，支持 Canvas2D 和 WebGL 渲染器动态切换
