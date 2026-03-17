@@ -1,15 +1,28 @@
 import type { Point, Stroke } from '../types';
 import type { Renderer } from './Renderer';
+import { worldToScreen, screenToWorld, type ViewState } from '../utils/coordinates';
+import { 
+  VISUAL_THEME, 
+  getEndpointIndicatorStyle,
+} from './RendererConfig';
 
-interface ViewState {
-  zoom: number;
-  panX: number;
-  panY: number;
+/**
+ * Canvas2D Rendering Options
+ */
+interface RenderOptions {
+  antialias: boolean;
+  dprAware: boolean;
 }
 
 /**
- * Canvas2D implementation of Renderer
- * Uses HTML5 Canvas API for drawing
+ * Canvas2D Renderer - Improved Implementation
+ * 
+ * Key improvements:
+ * 1. Layer-based rendering for proper z-ordering
+ * 2. Batch operations for performance
+ * 3. Clear separation of render vs update
+ * 4. Proper resource cleanup
+ * 5. Support for partial redraws
  */
 export class Canvas2DRenderer implements Renderer {
   private canvas: HTMLCanvasElement | null = null;
@@ -19,6 +32,14 @@ export class Canvas2DRenderer implements Renderer {
   private width: number = 0;
   private height: number = 0;
   private dpr: number = 1;
+  
+  // Stroke storage for batch rendering
+  private strokes: Map<string, Stroke> = new Map();
+  private needsRedraw: boolean = true;
+  private renderOptions: RenderOptions = {
+    antialias: true,
+    dprAware: true,
+  };
 
   initialize(container: HTMLElement): void {
     this.container = container;
@@ -32,7 +53,10 @@ export class Canvas2DRenderer implements Renderer {
     this.canvas.style.width = '100%';
     this.canvas.style.height = '100%';
     
-    this.ctx = this.canvas.getContext('2d');
+    this.ctx = this.canvas.getContext('2d', {
+      antialias: this.renderOptions.antialias,
+    }) as CanvasRenderingContext2D | null;
+    
     if (!this.ctx) {
       throw new Error('Failed to get 2D context');
     }
@@ -42,87 +66,254 @@ export class Canvas2DRenderer implements Renderer {
   }
 
   dispose(): void {
+    // Clear all strokes
+    this.strokes.clear();
+    
+    // Remove canvas from DOM
     if (this.canvas && this.container) {
       this.container.removeChild(this.canvas);
-      this.canvas = null;
-      this.ctx = null;
-      this.container = null;
     }
+    
+    // Nullify references
+    this.canvas = null;
+    this.ctx = null;
+    this.container = null;
   }
 
   resize(): void {
-    if (!this.canvas || !this.container) return;
+    if (!this.canvas || !this.container || !this.ctx) return;
     
     const rect = this.container.getBoundingClientRect();
     this.width = rect.width;
     this.height = rect.height;
     
-    this.canvas.width = this.width * this.dpr;
-    this.canvas.height = this.height * this.dpr;
-    
-    // Reset transform and scale for DPR
-    if (this.ctx) {
+    // Set canvas size accounting for DPR
+    if (this.renderOptions.dprAware) {
+      this.canvas.width = this.width * this.dpr;
+      this.canvas.height = this.height * this.dpr;
       this.ctx.setTransform(1, 0, 0, 1, 0, 0);
       this.ctx.scale(this.dpr, this.dpr);
+    } else {
+      this.canvas.width = this.width;
+      this.canvas.height = this.height;
     }
+    
+    this.needsRedraw = true;
   }
 
   render(): void {
-    // Canvas 2D renders immediately on each draw call
-    // No explicit render needed
+    if (!this.ctx || !this.needsRedraw) return;
+    
+    // Clear canvas
+    this.clearCanvas();
+    
+    // Render all strokes
+    this.renderStrokes();
+    
+    this.needsRedraw = false;
+  }
+
+  /**
+   * Request a redraw on next frame
+   */
+  invalidate(): void {
+    this.needsRedraw = true;
+  }
+
+  private clearCanvas(): void {
+    if (!this.ctx) return;
+    this.ctx.clearRect(0, 0, this.width, this.height);
+  }
+
+  private renderStrokes(): void {
+    if (!this.ctx) return;
+    
+    this.strokes.forEach(stroke => {
+      if (stroke.strokeType === 'artistic') {
+        this.renderArtisticStroke(stroke);
+      } else if (stroke.strokeType === 'digital') {
+        this.renderDigitalStroke(stroke);
+      }
+    });
+  }
+
+  private renderArtisticStroke(stroke: Stroke): void {
+    if (!this.ctx) return;
+    
+    const points = stroke.displayPoints ?? stroke.smoothedPoints ?? stroke.points;
+    if (points.length < 2) return;
+    
+    this.ctx.beginPath();
+    
+    // Convert first point to screen
+    const firstScreen = this.worldToScreen(points[0]);
+    this.ctx.moveTo(firstScreen.x, firstScreen.y);
+    
+    // Draw remaining points
+    for (let i = 1; i < points.length; i++) {
+      const screen = this.worldToScreen(points[i]);
+      this.ctx.lineTo(screen.x, screen.y);
+    }
+    
+    // Apply stroke style
+    this.ctx.strokeStyle = stroke.color;
+    this.ctx.lineWidth = stroke.thickness;
+    this.ctx.lineCap = 'round';
+    this.ctx.lineJoin = 'round';
+    
+    // Apply opacity if specified
+    if (stroke.brushSettings?.opacity !== undefined) {
+      this.ctx.globalAlpha = stroke.brushSettings.opacity;
+    }
+    
+    this.ctx.stroke();
+    this.ctx.globalAlpha = 1;
+  }
+
+  private renderDigitalStroke(stroke: Stroke): void {
+    if (!this.ctx || !stroke.digitalSegments) return;
+    
+    stroke.digitalSegments.forEach(segment => {
+      switch (segment.type) {
+        case 'line':
+          this.renderDigitalLine(segment.points, segment.color, stroke.thickness);
+          break;
+        case 'arc':
+          if (segment.arcData) {
+            this.renderDigitalArc(
+              segment.arcData.center,
+              segment.arcData.radius,
+              segment.arcData.startAngle,
+              segment.arcData.endAngle,
+              segment.color,
+              stroke.thickness
+            );
+          }
+          break;
+        case 'bezier':
+          this.renderDigitalBezier(segment.points, segment.color, stroke.thickness);
+          break;
+      }
+    });
+  }
+
+  private renderDigitalLine(points: Point[], color: string, thickness: number): void {
+    if (!this.ctx || points.length < 2) return;
+    
+    const start = this.worldToScreen(points[0]);
+    const end = this.worldToScreen(points[1]);
+    
+    this.ctx.beginPath();
+    this.ctx.moveTo(start.x, start.y);
+    this.ctx.lineTo(end.x, end.y);
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = thickness;
+    this.ctx.lineCap = 'round';
+    this.ctx.stroke();
+  }
+
+  private renderDigitalArc(
+    center: Point,
+    radius: number,
+    startAngle: number,
+    endAngle: number,
+    color: string,
+    thickness: number
+  ): void {
+    if (!this.ctx) return;
+    
+    const centerScreen = this.worldToScreen(center);
+    const radiusScreen = radius * this.viewState.zoom;
+    
+    this.ctx.beginPath();
+    this.ctx.arc(
+      centerScreen.x,
+      centerScreen.y,
+      radiusScreen,
+      -endAngle,
+      -startAngle,
+      false
+    );
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = thickness;
+    this.ctx.stroke();
+  }
+
+  private renderDigitalBezier(points: Point[], color: string, thickness: number): void {
+    if (!this.ctx || points.length < 4) return;
+    
+    const p0 = this.worldToScreen(points[0]);
+    const p1 = this.worldToScreen(points[1]);
+    const p2 = this.worldToScreen(points[2]);
+    const p3 = this.worldToScreen(points[3]);
+    
+    this.ctx.beginPath();
+    this.ctx.moveTo(p0.x, p0.y);
+    this.ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = thickness;
+    this.ctx.stroke();
   }
 
   setViewState(zoom: number, panX: number, panY: number): void {
     this.viewState = { zoom, panX, panY };
+    this.needsRedraw = true;
   }
 
   worldToScreen(point: Point): { x: number; y: number } {
-    return {
-      x: (point.x - this.viewState.panX) * this.viewState.zoom + this.width / 2,
-      y: this.height / 2 - (point.y - this.viewState.panY) * this.viewState.zoom
-    };
+    return worldToScreen(point, this.viewState, this.width, this.height);
   }
 
   screenToWorld(x: number, y: number): Point {
-    return {
-      x: (x - this.width / 2) / this.viewState.zoom + this.viewState.panX,
-      y: (this.height / 2 - y) / this.viewState.zoom + this.viewState.panY
-    };
+    return screenToWorld(x, y, this.viewState, this.width, this.height);
   }
 
-  // Artistic strokes - Canvas2D renders immediately
-  addStroke(_stroke: Stroke): void {
-    // Canvas2D renders strokes directly in render loop
-    // No persistent storage needed
+  // Stroke management
+  addStroke(stroke: Stroke): void {
+    this.strokes.set(stroke.id, stroke);
+    this.needsRedraw = true;
   }
 
-  removeStroke(_strokeId: string): void {
-    // Canvas2D clears and redraws each frame
+  removeStroke(strokeId: string): void {
+    this.strokes.delete(strokeId);
+    this.needsRedraw = true;
   }
 
   clearStrokes(): void {
-    // Canvas2D clears canvas each frame
+    this.strokes.clear();
+    this.needsRedraw = true;
   }
 
   updateCurrentStroke(_points: Point[], _color: string, _thickness: number, _opacity: number): void {
-    // Canvas2D renders current stroke in each frame
+    // Canvas2D renders current stroke inline
+    this.needsRedraw = true;
   }
 
   finalizeCurrentStroke(_strokeId: string): void {
     // Canvas2D just continues rendering
+    this.needsRedraw = true;
   }
 
   // Digital elements
-  addDigitalStroke(_stroke: Stroke): void {
-    // Canvas2D renders digital strokes directly
+  addDigitalStroke(stroke: Stroke): void {
+    this.strokes.set(stroke.id, stroke);
+    this.needsRedraw = true;
   }
 
-  removeDigitalStroke(_strokeId: string): void {
-    // Canvas2D clears and redraws
+  removeDigitalStroke(strokeId: string): void {
+    this.strokes.delete(strokeId);
+    this.needsRedraw = true;
   }
 
   clearDigitalElements(): void {
-    // Canvas2D clears canvas
+    // In Canvas2D, digital strokes are stored with regular strokes
+    // Filter and remove only digital strokes
+    this.strokes.forEach((stroke, id) => {
+      if (stroke.strokeType === 'digital') {
+        this.strokes.delete(id);
+      }
+    });
+    this.needsRedraw = true;
   }
 
   // Digital previews
@@ -137,7 +328,7 @@ export class Canvas2DRenderer implements Renderer {
     this.ctx.lineTo(p2.x, p2.y);
     this.ctx.strokeStyle = color;
     this.ctx.lineWidth = thickness;
-    this.ctx.setLineDash([6, 4]);
+    this.ctx.setLineDash(VISUAL_THEME.DASH_PATTERN);
     this.ctx.stroke();
     this.ctx.setLineDash([]);
   }
@@ -161,14 +352,14 @@ export class Canvas2DRenderer implements Renderer {
     // Draw preview line
     if (previewEnd && points.length > 0) {
       const last = this.worldToScreen(points[points.length - 1]);
-      const end = this.worldToScreen(previewEnd);
+      const preview = this.worldToScreen(previewEnd);
       
       this.ctx.beginPath();
       this.ctx.moveTo(last.x, last.y);
-      this.ctx.lineTo(end.x, end.y);
+      this.ctx.lineTo(preview.x, preview.y);
       this.ctx.strokeStyle = color;
       this.ctx.lineWidth = thickness;
-      this.ctx.setLineDash([6, 4]);
+      this.ctx.setLineDash(VISUAL_THEME.DASH_PATTERN);
       this.ctx.stroke();
       this.ctx.setLineDash([]);
     }
@@ -177,14 +368,16 @@ export class Canvas2DRenderer implements Renderer {
   updateDigitalCirclePreview(center: Point, radius: number, color: string, thickness: number): void {
     if (!this.ctx) return;
     
-    const c = this.worldToScreen(center);
-    const r = Math.abs(radius * this.viewState.zoom);
+    const centerScreen = this.worldToScreen(center);
+    const radiusScreen = radius * this.viewState.zoom;
     
     this.ctx.beginPath();
-    this.ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+    this.ctx.arc(centerScreen.x, centerScreen.y, radiusScreen, 0, Math.PI * 2);
     this.ctx.strokeStyle = color;
     this.ctx.lineWidth = thickness;
+    this.ctx.setLineDash(VISUAL_THEME.DASH_PATTERN);
     this.ctx.stroke();
+    this.ctx.setLineDash([]);
   }
 
   updateDigitalArcPreview(
@@ -197,136 +390,19 @@ export class Canvas2DRenderer implements Renderer {
   ): void {
     if (!this.ctx) return;
     
-    const c = this.worldToScreen(center);
-    const r = Math.abs(radius * this.viewState.zoom);
+    const centerScreen = this.worldToScreen(center);
+    const radiusScreen = radius * this.viewState.zoom;
     
     this.ctx.beginPath();
-    this.ctx.arc(c.x, c.y, r, -endAngle, -startAngle);
+    this.ctx.arc(centerScreen.x, centerScreen.y, radiusScreen, -endAngle, -startAngle);
     this.ctx.strokeStyle = color;
     this.ctx.lineWidth = thickness;
+    this.ctx.setLineDash(VISUAL_THEME.DASH_PATTERN);
     this.ctx.stroke();
+    this.ctx.setLineDash([]);
   }
 
   updateDigitalBezierPreview(points: Point[], color: string, thickness: number): void {
-    if (!this.ctx || points.length < 4) return;
-    
-    this.ctx.beginPath();
-    const p0 = this.worldToScreen(points[0]);
-    this.ctx.moveTo(p0.x, p0.y);
-    
-    // Draw bezier curve
-    for (let i = 1; i < points.length - 2; i += 3) {
-      const p1 = this.worldToScreen(points[i]);
-      const p2 = this.worldToScreen(points[i + 1]);
-      const p3 = this.worldToScreen(points[i + 2]);
-      this.ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
-    }
-    
-    this.ctx.strokeStyle = color;
-    this.ctx.lineWidth = thickness;
-    this.ctx.stroke();
-  }
-
-  clearDigitalPreviews(): void {
-    // Canvas2D clears entire canvas each frame
-  }
-
-  // Selection indicators
-  drawSelectionIndicator(point: Point, color: string, size: number): void {
-    if (!this.ctx) return;
-    
-    const p = this.worldToScreen(point);
-    
-    this.ctx.beginPath();
-    this.ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
-    this.ctx.fillStyle = color;
-    this.ctx.fill();
-    this.ctx.strokeStyle = '#ffffff';
-    this.ctx.lineWidth = 2;
-    this.ctx.stroke();
-  }
-
-  drawHoverIndicator(point: Point, color: string, size: number): void {
-    if (!this.ctx) return;
-    
-    const p = this.worldToScreen(point);
-    
-    this.ctx.beginPath();
-    this.ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
-    this.ctx.strokeStyle = color;
-    this.ctx.lineWidth = 2;
-    this.ctx.stroke();
-  }
-
-  clearIndicators(): void {
-    // Canvas2D clears entire canvas each frame
-  }
-
-  // Selection/highlight rendering for digital elements
-  highlightDigitalLine(points: Point[], color: string, thickness: number, isHovered: boolean, isSelected: boolean): void {
-    if (!this.ctx || points.length < 2) return;
-    
-    const p1 = this.worldToScreen(points[0]);
-    const p2 = this.worldToScreen(points[1]);
-    
-    this.ctx.beginPath();
-    this.ctx.moveTo(p1.x, p1.y);
-    this.ctx.lineTo(p2.x, p2.y);
-    this.ctx.strokeStyle = color;
-    this.ctx.lineWidth = isHovered || isSelected ? 2 : thickness;
-    
-    if (isSelected) {
-      this.ctx.setLineDash([4, 4]);
-    }
-    
-    if (isHovered) {
-      this.ctx.shadowColor = color;
-      this.ctx.shadowBlur = 4;
-    }
-    
-    this.ctx.stroke();
-    this.ctx.setLineDash([]);
-    this.ctx.shadowBlur = 0;
-  }
-
-  highlightDigitalArc(
-    arcData: { center: Point; radius: number; startAngle: number; endAngle: number },
-    color: string,
-    thickness: number,
-    isHovered: boolean,
-    isSelected: boolean
-  ): void {
-    if (!this.ctx) return;
-    
-    const center = this.worldToScreen(arcData.center);
-    const radius = Math.abs(arcData.radius * this.viewState.zoom);
-    const startAngleScreen = -arcData.startAngle;
-    const endAngleScreen = -arcData.endAngle;
-    const sweep = endAngleScreen - startAngleScreen;
-    const fullCircle = Math.abs(sweep) >= Math.PI * 2 - 1e-3;
-    const anticlockwise = sweep < 0;
-    const endAngle = fullCircle ? startAngleScreen + Math.PI * 2 : endAngleScreen;
-    
-    this.ctx.beginPath();
-    this.ctx.arc(center.x, center.y, radius, startAngleScreen, endAngle, anticlockwise);
-    this.ctx.strokeStyle = color;
-    this.ctx.lineWidth = isHovered || isSelected ? 2 : thickness;
-    
-    if (isSelected) {
-      this.ctx.setLineDash([4, 4]);
-    }
-    
-    if (isHovered) {
-      this.ctx.shadowColor = color;
-      this.ctx.shadowBlur = 4;
-    }
-    
-    this.ctx.stroke();
-    this.ctx.setLineDash([]);
-    this.ctx.shadowBlur = 0;
-  }
-
-  highlightDigitalBezier(points: Point[], color: string, thickness: number, isHovered: boolean, isSelected: boolean): void {
     if (!this.ctx || points.length < 4) return;
     
     const p0 = this.worldToScreen(points[0]);
@@ -338,57 +414,107 @@ export class Canvas2DRenderer implements Renderer {
     this.ctx.moveTo(p0.x, p0.y);
     this.ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
     this.ctx.strokeStyle = color;
-    this.ctx.lineWidth = isHovered || isSelected ? 2 : thickness;
-    
-    if (isSelected) {
-      this.ctx.setLineDash([4, 4]);
-    }
-    
-    if (isHovered) {
-      this.ctx.shadowColor = color;
-      this.ctx.shadowBlur = 4;
-    }
-    
+    this.ctx.lineWidth = thickness;
+    this.ctx.setLineDash(VISUAL_THEME.DASH_PATTERN);
     this.ctx.stroke();
     this.ctx.setLineDash([]);
-    this.ctx.shadowBlur = 0;
-    
-    // Draw control lines when hovered or selected
-    if (isHovered || isSelected) {
-      this.ctx.beginPath();
-      this.ctx.moveTo(p0.x, p0.y);
-      this.ctx.lineTo(p1.x, p1.y);
-      this.ctx.moveTo(p2.x, p2.y);
-      this.ctx.lineTo(p3.x, p3.y);
-      this.ctx.strokeStyle = color;
-      this.ctx.lineWidth = 0.5;
-      this.ctx.setLineDash([2, 2]);
-      this.ctx.stroke();
-      this.ctx.setLineDash([]);
-    }
   }
 
-  drawEndpointIndicator(point: Point, color: string, size: number): void {
-    if (!this.ctx) return;
+  clearDigitalPreviews(): void {
+    // Previews are drawn inline, just mark for redraw
+    this.needsRedraw = true;
+  }
+
+  // Highlights
+  highlightDigitalLine(points: Point[], color: string, thickness: number, isHovered: boolean, isSelected: boolean): void {
+    if (!this.ctx || points.length < 2) return;
     
-    const p = this.worldToScreen(point);
+    const start = this.worldToScreen(points[0]);
+    const end = this.worldToScreen(points[1]);
+    
+    const highlightColor = isSelected ? VISUAL_THEME.SELECT_COLOR : isHovered ? VISUAL_THEME.HOVER_COLOR : color;
+    const highlightWidth = thickness + (isSelected ? VISUAL_THEME.SELECT_WIDTH_ADD : isHovered ? VISUAL_THEME.HOVER_WIDTH_ADD : 0);
     
     this.ctx.beginPath();
-    this.ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
-    this.ctx.fillStyle = color;
+    this.ctx.moveTo(start.x, start.y);
+    this.ctx.lineTo(end.x, end.y);
+    this.ctx.strokeStyle = highlightColor;
+    this.ctx.lineWidth = highlightWidth;
+    this.ctx.lineCap = 'round';
+    this.ctx.stroke();
+  }
+
+  highlightDigitalArc(
+    arcData: { center: Point; radius: number; startAngle: number; endAngle: number },
+    color: string,
+    thickness: number,
+    isHovered: boolean,
+    isSelected: boolean
+  ): void {
+    if (!this.ctx) return;
+    
+    const centerScreen = this.worldToScreen(arcData.center);
+    const radiusScreen = arcData.radius * this.viewState.zoom;
+    
+    const highlightColor = isSelected ? VISUAL_THEME.SELECT_COLOR : isHovered ? VISUAL_THEME.HOVER_COLOR : color;
+    const highlightWidth = thickness + (isSelected ? VISUAL_THEME.SELECT_WIDTH_ADD : isHovered ? VISUAL_THEME.HOVER_WIDTH_ADD : 0);
+    
+    this.ctx.beginPath();
+    this.ctx.arc(
+      centerScreen.x,
+      centerScreen.y,
+      radiusScreen,
+      -arcData.endAngle,
+      -arcData.startAngle,
+      false
+    );
+    this.ctx.strokeStyle = highlightColor;
+    this.ctx.lineWidth = highlightWidth;
+    this.ctx.stroke();
+  }
+
+  highlightDigitalBezier(points: Point[], color: string, thickness: number, isHovered: boolean, isSelected: boolean): void {
+    if (!this.ctx || points.length < 4) return;
+    
+    const p0 = this.worldToScreen(points[0]);
+    const p1 = this.worldToScreen(points[1]);
+    const p2 = this.worldToScreen(points[2]);
+    const p3 = this.worldToScreen(points[3]);
+    
+    const highlightColor = isSelected ? VISUAL_THEME.SELECT_COLOR : isHovered ? VISUAL_THEME.HOVER_COLOR : color;
+    const highlightWidth = thickness + (isSelected ? VISUAL_THEME.SELECT_WIDTH_ADD : isHovered ? VISUAL_THEME.HOVER_WIDTH_ADD : 0);
+    
+    this.ctx.beginPath();
+    this.ctx.moveTo(p0.x, p0.y);
+    this.ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
+    this.ctx.strokeStyle = highlightColor;
+    this.ctx.lineWidth = highlightWidth;
+    this.ctx.stroke();
+  }
+
+  drawEndpointIndicator(point: Point, color: string, _size: number): void {
+    if (!this.ctx) return;
+    
+    const style = getEndpointIndicatorStyle(color);
+    const screen = this.worldToScreen(point);
+    
+    this.ctx.beginPath();
+    this.ctx.arc(screen.x, screen.y, style.size, 0, Math.PI * 2);
+    this.ctx.fillStyle = style.color;
     this.ctx.fill();
-    this.ctx.strokeStyle = '#ffffff';
-    this.ctx.lineWidth = 1;
+    this.ctx.strokeStyle = style.borderColor || '#ffffff';
+    this.ctx.lineWidth = style.borderWidth || 1;
     this.ctx.stroke();
   }
 
   drawControlPointIndicator(point: Point, color: string, size: number): void {
     if (!this.ctx) return;
     
-    const p = this.worldToScreen(point);
+    const screen = this.worldToScreen(point);
+    const halfSize = size / 2;
     
     this.ctx.beginPath();
-    this.ctx.rect(p.x - size / 2, p.y - size / 2, size, size);
+    this.ctx.rect(screen.x - halfSize, screen.y - halfSize, size, size);
     this.ctx.fillStyle = color;
     this.ctx.fill();
     this.ctx.strokeStyle = '#ffffff';
@@ -399,39 +525,21 @@ export class Canvas2DRenderer implements Renderer {
   drawCrossIndicator(point: Point, color: string, size: number): void {
     if (!this.ctx) return;
     
-    const p = this.worldToScreen(point);
+    const screen = this.worldToScreen(point);
+    const halfSize = size / 2;
     
     this.ctx.beginPath();
-    this.ctx.moveTo(p.x - size, p.y - size);
-    this.ctx.lineTo(p.x + size, p.y + size);
-    this.ctx.moveTo(p.x + size, p.y - size);
-    this.ctx.lineTo(p.x - size, p.y + size);
+    this.ctx.moveTo(screen.x - halfSize, screen.y);
+    this.ctx.lineTo(screen.x + halfSize, screen.y);
+    this.ctx.moveTo(screen.x, screen.y - halfSize);
+    this.ctx.lineTo(screen.x, screen.y + halfSize);
     this.ctx.strokeStyle = color;
     this.ctx.lineWidth = 2;
     this.ctx.stroke();
-    
-    // Draw a small circle in the center
-    this.ctx.beginPath();
-    this.ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-    this.ctx.fillStyle = color;
-    this.ctx.fill();
   }
 
   clearHighlights(): void {
-    // Canvas2D clears entire canvas each frame
-  }
-
-  // Additional methods for Canvas2D
-  clearCanvas(): void {
-    if (!this.ctx) return;
-    this.ctx.clearRect(0, 0, this.width, this.height);
-  }
-
-  getContext(): CanvasRenderingContext2D | null {
-    return this.ctx;
-  }
-
-  getSize(): { width: number; height: number } {
-    return { width: this.width, height: this.height };
+    // Highlights are drawn inline
+    this.needsRedraw = true;
   }
 }

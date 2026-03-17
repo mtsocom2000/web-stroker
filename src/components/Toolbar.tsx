@@ -212,9 +212,8 @@ export const Toolbar: React.FC = () => {
     <div className="toolbar">
       <div className="toolbar-group">
         <button
-          className={`toolbar-btn ${store.mode === 'select' ? 'toolbar-btn-active' : ''}`}
+          className={`toolbar-btn ${store.digitalMode === 'select' ? 'toolbar-btn-active' : ''}`}
           onClick={() => {
-            store.setMode('select');
             store.setDigitalMode('select');
           }}
           title="Select mode (V)"
@@ -222,9 +221,8 @@ export const Toolbar: React.FC = () => {
           Select
         </button>
         <button
-          className={`toolbar-btn ${store.mode === 'draw' ? 'toolbar-btn-active' : ''}`}
+          className={`toolbar-btn ${store.digitalMode === 'draw' ? 'toolbar-btn-active' : ''}`}
           onClick={() => {
-            store.setMode('draw');
             if (store.toolCategory === 'digital') {
               store.setDigitalMode('draw');
             }
@@ -499,7 +497,7 @@ export const Toolbar: React.FC = () => {
       </button>
 
       <div className="toolbar-info">
-        Mode: <span>{store.mode === 'select' ? 'Select' : 'Draw'}</span> | Zoom: <span>{(store.zoom * 100).toFixed(0)}%</span> | Strokes: <span>{store.strokes.length}</span>
+        Mode: <span>{store.digitalMode === 'select' ? 'Select' : 'Draw'}</span> | Zoom: <span>{(store.zoom * 100).toFixed(0)}%</span> | Strokes: <span>{store.strokes.length}</span>
       </div>
 
       <input

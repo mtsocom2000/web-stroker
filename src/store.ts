@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Stroke, CanvasState, DigitalSegment, ToolCategory, ArtisticTool, DigitalTool, MeasureTool, Point, LengthUnit, AngleUnit } from './types';
+import type { Stroke, CanvasState, ToolCategory, ArtisticTool, DigitalTool, MeasureTool, Point, LengthUnit, AngleUnit } from './types';
 import type { BrushType, BrushSettings } from './brush/presets';
 import type { FillRegion } from './fillRegion';
 
@@ -12,8 +12,6 @@ const DEFAULT_PIXELS_PER_UNIT: Record<LengthUnit, number> = {
   inch: 96,
   px: 1,
 };
-
-type DrawingMode = 'select' | 'draw';
 
 type DigitalMode = 'select' | 'draw';
 
@@ -78,10 +76,6 @@ interface DrawingState {
   drawingClearCounter: number;
   incrementClearCounter: () => void;
 
-  // Mode (for backward compatibility - select/draw)
-  mode: DrawingMode;
-  setMode: (mode: DrawingMode) => void;
-
   // Digital Selection
   selectedDigitalStrokeIds: string[];
   setSelectedDigitalStrokeIds: (ids: string[]) => void;
@@ -101,9 +95,6 @@ interface DrawingState {
   updateStrokes: (strokes: { id: string; stroke: Stroke }[]) => void;
   updateStrokePoints: (id: string, points: Point[]) => void; // For animation replay
   clearStrokes: () => void;
-  
-  // Digital segments (helper - get all digital segments from strokes)
-  getDigitalSegments: () => DigitalSegment[];
 
   // Fill Regions
   fillRegions: FillRegion[];
@@ -341,9 +332,6 @@ export const useDrawingStore = create<DrawingState>((set) => {
       });
       return success;
     },
-
-    // Mode
-    setMode: (mode) => set({ mode }),
 
     // Stroke operations
     addStroke: (stroke) =>
@@ -618,11 +606,5 @@ export const useDrawingStore = create<DrawingState>((set) => {
     // Renderer Configuration
     renderer: 'canvas2d',
     setRenderer: (renderer) => set({ renderer }),
-
-    // Helper to get all digital segments from strokes
-    getDigitalSegments: () => {
-      const segments: DigitalSegment[] = [];
-      return segments;
-    },
   };
 });

@@ -77,6 +77,9 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
   // Track modified stroke IDs during drag for persistence on dragEnd
   const modifiedStrokeIdsRef = useRef<Set<string>>(new Set());
 
+  // Track which stroke IDs have been synced to the renderer (for delta sync)
+  const syncedStrokeIdsRef = useRef<Set<string>>(new Set());
+
   // Track drag state to skip expensive operations during drag
   const isDraggingRef = useRef(false);
 
@@ -123,16 +126,9 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     
     // Only rebuild closed areas in select mode - skip during drawing for performance
     const isInClosedAreaMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') || 
-                               (store.toolCategory === 'artistic' && store.mode === 'select') ||
                                (store.toolCategory === 'measure' && store.measureTool === 'face');
     
     if (closedAreaManagerRef.current && isInClosedAreaMode) {
-      console.log('[face] setStrokes immediate', {
-        strokes: store.strokes.length,
-        toolCategory: store.toolCategory,
-        measureTool: store.measureTool,
-        digitalMode: store.digitalMode,
-      });
       const digitalStrokeData = store.strokes
         .filter(s => s.strokeType === 'digital')
         .map(s => ({
@@ -144,21 +140,14 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         }));
         closedAreaManagerRef.current.setStrokes(digitalStrokeData);
     }
-  }, [store.strokes, store.toolCategory, store.digitalMode, store.mode, store.measureTool]);
+  }, [store.strokes, store.toolCategory, store.digitalMode, store.measureTool]);
 
   // Rebuild closed areas when switching to select mode (with debounce)
   useEffect(() => {
     const isInClosedAreaMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') || 
-                               (store.toolCategory === 'artistic' && store.mode === 'select') ||
                                (store.toolCategory === 'measure' && store.measureTool === 'face');
     
     if (isInClosedAreaMode && closedAreaManagerRef.current) {
-      console.log('[face] setStrokes on mode change', {
-        strokes: store.strokes.length,
-        toolCategory: store.toolCategory,
-        measureTool: store.measureTool,
-        digitalMode: store.digitalMode,
-      });
       const digitalStrokeData = store.strokes
         .filter(s => s.strokeType === 'digital')
         .map(s => ({
@@ -183,7 +172,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       
       return () => clearTimeout(timeoutId);
     }
-  }, [store.toolCategory, store.digitalMode, store.mode, store.measureTool]);
+  }, [store.toolCategory, store.digitalMode, store.measureTool]);
 
   useEffect(() => {
     panRef.current = { x: store.panX, y: store.panY, zoom: store.zoom };
@@ -577,8 +566,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     // Draw digital strokes (lines, circles, curves) - ONLY in 2D mode
     // In Three.js mode, digital strokes are rendered by Three.js
     // But in Three.js mode, we still need to draw highlights via renderer
-    const isInSelectMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') || 
-                           (store.toolCategory === 'artistic' && store.mode === 'select');
+    const isInSelectMode = store.toolCategory === 'digital' && store.digitalMode === 'select';
     
     // Get hovered area stroke IDs if in select mode
     let hoveredAreaStrokeIds: string[] = [];
@@ -1036,7 +1024,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         drawStroke(ctx, currentStrokePoints, store.currentColor, store.currentBrushSettings.size, worldToScreen, store.currentBrushSettings.opacity);
       }
     }
-  }, [currentStrokePoints, store.currentColor, store.currentBrushSettings.size, store.currentBrushSettings.opacity, worldToScreen, store.toolCategory, store.digitalMode, store.digitalTool, store.mode, hoveredDigitalElement, selectedDigitalElements, digitalLinePoints, digitalLinePreviewEnd, circleCenter, circleRadiusPoint, circlePoints, arcPoints, arcRadiusPoint, curvePoints, store.circleCreationMode, lastMousePosRef, store.strokes, store.renderer]);
+  }, [currentStrokePoints, store.currentColor, store.currentBrushSettings.size, store.currentBrushSettings.opacity, worldToScreen, store.toolCategory, store.digitalMode, store.digitalTool, hoveredDigitalElement, selectedDigitalElements, digitalLinePoints, digitalLinePreviewEnd, circleCenter, circleRadiusPoint, circlePoints, arcPoints, arcRadiusPoint, curvePoints, store.circleCreationMode, lastMousePosRef, store.strokes, store.renderer]);
 
   // Track current stroke for Three.js renderer
   const currentStrokeRef = useRef(currentStrokePoints);
@@ -1101,16 +1089,30 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     if (!container) return;
 
     // Initialize renderer based on store configuration
-    if (!rendererRef.current) {
-      if (store.renderer === 'threejs') {
-        rendererRef.current = new WebGLRenderer();
-      } else {
-        rendererRef.current = new Canvas2DRenderer();
-      }
-      rendererRef.current.initialize(container);
-      // Sync initial view state
-      rendererRef.current.setViewState(store.zoom, store.panX, store.panY);
+    // Phase 2: Dispose old renderer and reinitialize on renderer type change
+    if (rendererRef.current) {
+      rendererRef.current.dispose();
+      rendererRef.current = null;
+      syncedStrokeIdsRef.current.clear();
     }
+
+    // Create new renderer
+    const renderer = store.renderer === 'threejs'
+      ? new WebGLRenderer()
+      : new Canvas2DRenderer();
+    renderer.initialize(container);
+    renderer.setViewState(store.zoom, store.panX, store.panY);
+    rendererRef.current = renderer;
+
+    // Sync all existing strokes to new renderer
+    strokesRef.current.forEach(stroke => {
+      if (stroke.strokeType === 'digital') {
+        renderer.addDigitalStroke(stroke);
+      } else {
+        renderer.addStroke(stroke);
+      }
+      syncedStrokeIdsRef.current.add(stroke.id);
+    });
 
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
@@ -1131,12 +1133,26 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     const animate = () => {
       // Sync strokes and update current stroke for renderer
       if (rendererRef.current) {
-        // Add any new strokes to renderer
+        const currentIds = new Set(strokesRef.current.map(s => s.id));
+        
+        // Add new strokes (delta sync - only strokes not yet synced)
         strokesRef.current.forEach(stroke => {
-          if (stroke.strokeType === 'digital') {
-            rendererRef.current!.addDigitalStroke(stroke);
-          } else {
-            rendererRef.current!.addStroke(stroke);
+          if (!syncedStrokeIdsRef.current.has(stroke.id)) {
+            if (stroke.strokeType === 'digital') {
+              rendererRef.current!.addDigitalStroke(stroke);
+            } else {
+              rendererRef.current!.addStroke(stroke);
+            }
+            syncedStrokeIdsRef.current.add(stroke.id);
+          }
+        });
+        
+        // Remove deleted strokes
+        syncedStrokeIdsRef.current.forEach(id => {
+          if (!currentIds.has(id)) {
+            rendererRef.current!.removeStroke(id);
+            rendererRef.current!.removeDigitalStroke(id);
+            syncedStrokeIdsRef.current.delete(id);
           }
         });
         
@@ -1173,8 +1189,10 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
         rendererRef.current.dispose();
         rendererRef.current = null;
       }
+      // Clear synced stroke tracking
+      syncedStrokeIdsRef.current.clear();
     };
-  }, [render, store.renderer, store.zoom, store.panX, store.panY]);
+  }, [render, store.renderer]);
 
   const distanceToSegment = useCallback((point: { x: number; y: number }, segStart: Point, segEnd: Point): number => {
     const dx = segEnd.x - segStart.x;
@@ -2097,38 +2115,37 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
     // Handle artistic tool drawing
     if (store.toolCategory === 'artistic') {
-      if (store.mode === 'select') {
-        // First check if clicking on a closed area (only for digital)
-        if (closedAreaManagerRef.current) {
-          const areaResult = closedAreaManagerRef.current.startDrag(world);
-          if (areaResult.area && areaResult.strokeIds.length > 0) {
-            setIsDraggingArea(true);
-            setDraggedStrokeIds(areaResult.strokeIds);
-            setLastDragPoint(world);
-            return;
-          }
+      // First check if clicking on a closed area (only for digital)
+      if (closedAreaManagerRef.current) {
+        const areaResult = closedAreaManagerRef.current.startDrag(world);
+        if (areaResult.area && areaResult.strokeIds.length > 0) {
+          setIsDraggingArea(true);
+          setDraggedStrokeIds(areaResult.strokeIds);
+          setLastDragPoint(world);
+          return;
         }
+      }
 
-        // Otherwise check if clicking on a stroke
-        const clickedStrokeId = findStrokeAtPosition(world);
+      // Otherwise check if clicking on a stroke
+      const clickedStrokeId = findStrokeAtPosition(world);
 
-        if (e.ctrlKey || e.metaKey) {
-          if (clickedStrokeId) {
-            store.toggleSelection(clickedStrokeId);
-          }
-        } else if (clickedStrokeId) {
-          store.setSelectedStrokeIds([clickedStrokeId]);
-        } else {
-          store.clearSelection();
+      if (e.ctrlKey || e.metaKey) {
+        if (clickedStrokeId) {
+          store.toggleSelection(clickedStrokeId);
         }
+      } else if (clickedStrokeId) {
+        store.setSelectedStrokeIds([clickedStrokeId]);
+      } else {
+        store.clearSelection();
+      }
 
-        if (store.selectedStrokeIds.length > 0 || clickedStrokeId) {
-          setIsDragging(true);
-          setDragStart(world);
-        }
+      if (store.selectedStrokeIds.length > 0 || clickedStrokeId) {
+        setIsDragging(true);
+        setDragStart(world);
         return;
       }
 
+      // No stroke clicked, start drawing
       const timestamp = Date.now();
       setIsDrawing(true);
       setCurrentStrokePoints([{ ...world, timestamp }]);
@@ -2188,8 +2205,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     }
 
     // Handle digital hover and drag in both digital and artistic select mode
-    const isInSelectMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') || 
-                           (store.toolCategory === 'artistic' && store.mode === 'select');
+    const isInSelectMode = store.toolCategory === 'digital' && store.digitalMode === 'select';
     const isInMeasureMode = store.toolCategory === 'measure';
     const isDigitalSelectMode = store.toolCategory === 'digital' && store.digitalMode === 'select';
     
@@ -2363,7 +2379,6 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     // Handle hover for closed areas (skip during drag to avoid expensive recalculations)
     if (closedAreaManagerRef.current && !isDraggingDigital) {
       const isInClosedAreaMode = (store.toolCategory === 'digital' && store.digitalMode === 'select') ||
-                                 (store.toolCategory === 'artistic' && store.mode === 'select') ||
                                  (store.toolCategory === 'measure' && store.measureTool === 'face');
       if (isInClosedAreaMode) {
         const hoveredArea = closedAreaManagerRef.current.hitTest(world);
@@ -2405,7 +2420,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       return;
     }
 
-    if (isDragging && store.mode === 'select' && store.selectedStrokeIds.length > 0) {
+    if (isDragging && store.selectedStrokeIds.length > 0) {
       if (!world) return;
       const dx = world.x - dragStart.x;
       const dy = world.y - dragStart.y;
@@ -2450,7 +2465,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
       return;
     }
 
-    if (isDragging && store.mode === 'select') {
+    if (isDragging) {
       setIsDragging(false);
       setDragStart({ x: 0, y: 0 });
       return;

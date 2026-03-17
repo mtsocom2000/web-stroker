@@ -26,9 +26,9 @@ function App() {
       } else if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
       } else if (e.key === 'v' || e.key === 'V') {
-        store.setMode('select');
+        store.setDigitalMode('select');
       } else if (e.key === 'd' || e.key === 'D') {
-        store.setMode('draw');
+        store.setDigitalMode('draw');
       } else if (e.key === 'm' || e.key === 'M') {
         store.setToolCategory('measure');
       } else if (e.key === 'Escape') {

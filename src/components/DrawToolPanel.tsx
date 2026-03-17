@@ -171,7 +171,6 @@ export const DrawToolPanel: React.FC = () => {
     setActiveTab(tab);
     if (tab === 'artistic') {
       store.setToolCategory('artistic');
-      store.setMode('draw');
     } else {
       store.setToolCategory('digital');
     }

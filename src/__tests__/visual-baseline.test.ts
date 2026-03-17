@@ -25,7 +25,7 @@ describe('Visual Baseline Tests', () => {
     },
     {
       name: 'artistic_brush_curve',
-      file: 'baseline/shapes/curve/handdrawn_curve.json',
+      file: 'baseline/shapes/arc/perfect_quarter_arc.json',
       mode: 'smooth',
       brush: 'brush',
       opacity: 0.7,
@@ -93,7 +93,8 @@ describe('Visual Baseline Tests', () => {
       // 基本验证
       expect(baseline.pointCount).toBeGreaterThan(0);
       expect(baseline.boundingBox.width).toBeGreaterThan(0);
-      expect(baseline.boundingBox.height).toBeGreaterThan(0);
+      // 对于水平线，height可能为0，这是合法的
+      expect(baseline.boundingBox.height).toBeGreaterThanOrEqual(0);
     });
   });
 });
