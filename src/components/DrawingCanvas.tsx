@@ -11,6 +11,7 @@ import { useSelectTool } from '../hooks/useSelectTool';
 import { useMeasureTools } from '../hooks/useMeasureTools';
 import { useArtisticDrawing } from '../hooks/useArtisticDrawing';
 import { useDigitalDrawing } from '../hooks/useDigitalDrawing';
+import { ConstraintMarkers } from './ConstraintMarkers';
 import { drawGrid } from '../utils/canvasDrawing';
 import './DrawingCanvas.css';
 
@@ -334,6 +335,26 @@ export const DrawingCanvas: React.FC = () => {
         onMouseLeave={handleMouseUp}
         onWheel={handleWheel}
       />
+      {/* Constraint UI overlays */}
+      <svg style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+        zIndex: 100
+      }}>
+        <ConstraintMarkers
+          constraints={store.constraints}
+          getPointForTarget={(_target) => {
+            // TODO: Get point from stroke based on target
+            return null;
+          }}
+          worldToScreen={worldToScreen}
+        />
+      </svg>
+      {/* Constraint input box will be added when constraint creation flow is implemented */}
     </div>
   );
 };
