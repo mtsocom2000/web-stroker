@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { useDrawingStore } from '../store';
 import type { Point, Stroke, DigitalSegment, SelectableElement } from '../types';
 import { distance } from '../utils';
+import { useDrawingStore } from '../store';
 
 interface UseSelectToolOptions {
   screenToWorld: (x: number, y: number) => Point;
@@ -177,14 +178,37 @@ export function useSelectTool(options: UseSelectToolOptions): UseSelectToolRetur
     
     // Handle drag
     if (isDragging && selectedElementRef.current) {
+      let constrainedPoint = worldPoint;
+      
+      // Get constraints for this point
+      const constraints = store.getConstraintsForPoint(
+        selectedElementRef.current.strokeId,
+        selectedElementRef.current.pointIndex ?? 0
+      );
+      
+      // Apply constraints if any
+      if (constraints.length > 0 && dragStartRef.current) {
+        const anchorPoint = dragStartRef.current;
+        for (const constraint of constraints) {
+          const enforced = store.constraintManager.enforceConstraint(
+            constraint.id,
+            constrainedPoint,
+            anchorPoint
+          );
+          if (enforced) {
+            constrainedPoint = enforced;
+          }
+        }
+      }
+      
       const dragOffset = {
-        x: worldPoint.x - dragStartRef.current.x,
-        y: worldPoint.y - dragStartRef.current.y,
+        x: constrainedPoint.x - dragStartRef.current.x,
+        y: constrainedPoint.y - dragStartRef.current.y,
       };
       
       // TODO: Apply drag offset to selected element
       // This requires modifying strokes in the store
-      console.log('[useSelectTool] Dragging:', dragOffset);
+      console.log('[useSelectTool] Dragging with constraints:', dragOffset);
     }
   }, [screenToWorld, store.selectMode, isDragging, findElementAtPoint]);
 
