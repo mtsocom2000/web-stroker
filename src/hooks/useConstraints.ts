@@ -1,29 +1,45 @@
 import { useCallback } from 'react';
-import type { ConstraintType, ConstraintTarget } from '../constraints/ConstraintTypes';
+import { useDrawingStore } from '../store';
+import type { ConstraintType, ConstraintTarget, Constraint } from '../constraints/ConstraintTypes';
+import { generateId } from '../utils';
 
 export function useConstraints() {
+  const store = useDrawingStore();
 
-  const startCreation = useCallback((_type: ConstraintType) => {
-    // TODO: Set store state to constraint creation mode
-  }, []);
+  const startCreation = useCallback((type: ConstraintType) => {
+    store.setIsCreatingConstraint(true);
+    store.setConstraintType(type);
+    store.clearConstraintTargets();
+  }, [store]);
 
-  const addTarget = useCallback((_target: ConstraintTarget) => {
-    // TODO: Add target to pending targets
-  }, []);
+  const addTarget = useCallback((target: ConstraintTarget) => {
+    store.addConstraintTarget(target);
+  }, [store]);
 
   const completeCreation = useCallback((value: number) => {
-    // TODO: Create constraint from pending targets + value
-    console.log('Complete constraint creation with value:', value);
-  }, []);
+    const constraint: Constraint = {
+      id: generateId(),
+      type: store.constraintType as ConstraintType,
+      value,
+      targets: store.constraintPendingTargets,
+      createdAt: Date.now()
+    };
+    store.addConstraint(constraint);
+    store.setIsCreatingConstraint(false);
+    store.setConstraintType(null);
+    store.clearConstraintTargets();
+  }, [store]);
 
   const cancelCreation = useCallback(() => {
-    // TODO: Clear pending state
-  }, []);
+    store.setIsCreatingConstraint(false);
+    store.setConstraintType(null);
+    store.clearConstraintTargets();
+  }, [store]);
 
   return {
-    isCreating: false,
-    constraintType: null,
-    pendingTargets: [],
+    isCreating: store.isCreatingConstraint,
+    constraintType: store.constraintType,
+    pendingTargets: store.constraintPendingTargets,
     startCreation,
     addTarget,
     completeCreation,

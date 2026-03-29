@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Stroke, CanvasState, ToolCategory, ArtisticTool, DigitalTool, MeasureTool, Point, LengthUnit, AngleUnit, SelectableElement, Constraint } from './types';
+import type { Stroke, CanvasState, ToolCategory, ArtisticTool, DigitalTool, MeasureTool, Point, LengthUnit, AngleUnit, SelectableElement, Constraint, ConstraintType, ConstraintTarget } from './types';
 import type { BrushType, BrushSettings } from './brush/presets';
 import type { FillRegion } from './fillRegion';
 import { ConstraintManager } from './constraints/ConstraintManager';
@@ -100,6 +100,15 @@ interface DrawingState {
   removeConstraint: (id: string) => void;
   updateConstraint: (id: string, value: number) => void;
   getConstraintsForPoint: (strokeId: string, pointIndex: number) => Constraint[];
+  
+  // Constraint creation state
+  isCreatingConstraint: boolean;
+  constraintType: ConstraintType | null;
+  constraintPendingTargets: ConstraintTarget[];
+  setIsCreatingConstraint: (isCreating: boolean) => void;
+  setConstraintType: (type: ConstraintType | null) => void;
+  addConstraintTarget: (target: ConstraintTarget) => void;
+  clearConstraintTargets: () => void;
 
   // Strokes
   strokes: Stroke[];
@@ -298,6 +307,17 @@ export const useDrawingStore = create<DrawingState>((set) => {
     getConstraintsForPoint: (strokeId: string, pointIndex: number): Constraint[] => {
       return useDrawingStore.getState().constraintManager.getConstraintsForTarget(strokeId, pointIndex);
     },
+    
+    // Constraint creation state
+    isCreatingConstraint: false,
+    constraintType: null,
+    constraintPendingTargets: [],
+    setIsCreatingConstraint: (isCreating) => set({ isCreatingConstraint: isCreating }),
+    setConstraintType: (type) => set({ constraintType: type }),
+    addConstraintTarget: (target) => set((state) => ({
+      constraintPendingTargets: [...state.constraintPendingTargets, target]
+    })),
+    clearConstraintTargets: () => set({ constraintPendingTargets: [] }),
 
     strokes: [],
     fillRegions: [],
