@@ -318,9 +318,8 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.scale(dpr, dpr);
 
-    // When using Three.js renderer, clear with transparent to let WebGL show through
-    // Always render 2D canvas elements (background, grid, UI, measurements)
-    // Strokes are rendered by Three.js, but UI elements stay in 2D
+    // Clear canvas - Three.js uses transparent background, 2D uses solid
+    // This is the ONLY renderer-specific check needed for canvas setup
     if (store.renderer === 'threejs') {
       ctx.clearRect(0, 0, width, height);
     } else {
@@ -330,7 +329,7 @@ export const DrawingCanvas: React.FC<CanvasProps> = ({ onStrokeComplete }) => {
 
     const { toolCategory, pixelsPerUnit } = store;
     
-    // Draw grid - always in 2D canvas for UI consistency
+    // Draw grid - always in 2D canvas for both renderers (consistent UI)
     drawGrid(ctx, width, height, panRef.current, toolCategory, pixelsPerUnit);
 
     // Draw snap indicator

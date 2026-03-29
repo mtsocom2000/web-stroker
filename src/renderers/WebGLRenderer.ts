@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import type { Point } from '../types';
-import { Renderer } from './Renderer';
+import type { Point, Stroke } from '../types';
+import type { Renderer } from './Renderer';
 import type { RenderCommand, Geometry, RenderStyle } from './commands/RenderCommand';
 import { worldToScreen as worldToScreenUtil, screenToWorld as screenToWorldUtil } from '../utils/coordinates';
 import { VISUAL_THEME } from './RendererConfig';
@@ -35,7 +35,7 @@ interface ViewState {
 
 /**
  * WebGL/Three.js implementation of Renderer
- * Extends Renderer base class to execute RenderCommands.
+ * Implements Renderer interface to execute RenderCommands.
  * Uses WebGL for hardware-accelerated rendering.
  *
  * Key features:
@@ -44,7 +44,7 @@ interface ViewState {
  * 3. Proper z-depth layering
  * 4. Dashed line support via LineDashedMaterial
  */
-export class WebGLRenderer extends Renderer {
+export class WebGLRenderer implements Renderer {
   private container: HTMLElement | null = null;
   private scene: THREE.Scene | null = null;
   private camera: THREE.OrthographicCamera | null = null;
@@ -197,11 +197,45 @@ export class WebGLRenderer extends Renderer {
     const sortedCommands = [...commands].sort((a, b) => a.zIndex - b.zIndex);
     
     for (const command of sortedCommands) {
-      this.executeCommand(command);
+      this.processCommand(command);
     }
     
     this.endFrame();
     this.render();
+  }
+
+  /**
+   * Process a single render command
+   */
+  private processCommand(command: RenderCommand): void {
+    switch (command.type) {
+      case 'stroke':
+        this.drawStroke(command.geometry, command.style);
+        break;
+      case 'preview':
+        this.drawPreview(command.geometry, command.style);
+        break;
+      case 'highlight':
+        this.drawHighlight(command.geometry, command.style);
+        break;
+      case 'indicator':
+        if (command.geometry.type === 'point') {
+          this.drawIndicator(command.geometry.point, command.style);
+        }
+        break;
+      case 'label':
+        this.drawLabel({
+          text: (command as any).text,
+          position: command.geometry.type === 'point' ? command.geometry.point : { x: 0, y: 0 },
+          style: command.style,
+        });
+        break;
+      case 'closedArea':
+        if (command.geometry.type === 'polygon') {
+          this.drawClosedArea(command.geometry, command.style);
+        }
+        break;
+    }
   }
 
   // ============================================================================
@@ -749,5 +783,94 @@ export class WebGLRenderer extends Renderer {
    */
   invalidate(): void {
     // No-op for WebGL - it renders immediately
+  }
+
+  // ============================================================================
+  // Legacy API - Stub implementations for backward compatibility
+  // These methods are deprecated and will be removed after migration
+  // ============================================================================
+
+  addStroke(_stroke: Stroke): void {
+    // Legacy API - not used in new architecture
+  }
+
+  removeStroke(_strokeId: string): void {
+    // Legacy API - not used in new architecture
+  }
+
+  clearStrokes(): void {
+    // Legacy API - not used in new architecture
+  }
+
+  updateCurrentStroke(_points: Point[], _color: string, _thickness: number, _opacity: number): void {
+    // Legacy API - not used in new architecture
+  }
+
+  finalizeCurrentStroke(_strokeId: string): void {
+    // Legacy API - not used in new architecture
+  }
+
+  addDigitalStroke(_stroke: Stroke): void {
+    // Legacy API - not used in new architecture
+  }
+
+  removeDigitalStroke(_strokeId: string): void {
+    // Legacy API - not used in new architecture
+  }
+
+  clearDigitalElements(): void {
+    // Legacy API - not used in new architecture
+  }
+
+  updateDigitalLinePreview(_start: Point, _end: Point, _color: string, _thickness: number): void {
+    // Legacy API - not used in new architecture
+  }
+
+  updateDigitalPolylinePreview(_points: Point[], _previewEnd: Point | null, _color: string, _thickness: number): void {
+    // Legacy API - not used in new architecture
+  }
+
+  updateDigitalCirclePreview(_center: Point, _radius: number, _color: string, _thickness: number): void {
+    // Legacy API - not used in new architecture
+  }
+
+  updateDigitalArcPreview(_center: Point, _radius: number, _startAngle: number, _endAngle: number, _color: string, _thickness: number): void {
+    // Legacy API - not used in new architecture
+  }
+
+  updateDigitalBezierPreview(_points: Point[], _color: string, _thickness: number): void {
+    // Legacy API - not used in new architecture
+  }
+
+  clearDigitalPreviews(): void {
+    // Legacy API - not used in new architecture
+  }
+
+  highlightDigitalLine(_points: Point[], _color: string, _thickness: number, _isHovered: boolean, _isSelected: boolean): void {
+    // Legacy API - not used in new architecture
+  }
+
+  highlightDigitalArc(_arcData: { center: Point; radius: number; startAngle: number; endAngle: number }, _color: string, _thickness: number, _isHovered: boolean, _isSelected: boolean): void {
+    // Legacy API - not used in new architecture
+  }
+
+  highlightDigitalBezier(_points: Point[], _color: string, _thickness: number, _isHovered: boolean, _isSelected: boolean): void {
+    // Legacy API - not used in new architecture
+  }
+
+  drawEndpointIndicator(_point: Point, _color: string, _size: number): void {
+    // Legacy API - not used in new architecture
+  }
+
+  drawControlPointIndicator(_point: Point, _color: string, _size: number): void {
+    // Legacy API - not used in new architecture
+  }
+
+  drawCrossIndicator(_point: Point, _color: string, _size: number): void {
+    // Legacy API - not used in new architecture
+  }
+
+  clearHighlights(): void {
+    // Legacy API - not used in new architecture
   }
 }
