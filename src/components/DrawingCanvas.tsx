@@ -11,7 +11,10 @@ import { useSelectTool } from '../hooks/useSelectTool';
 import { useMeasureTools } from '../hooks/useMeasureTools';
 import { useArtisticDrawing } from '../hooks/useArtisticDrawing';
 import { useDigitalDrawing } from '../hooks/useDigitalDrawing';
+import { useConstraints } from '../hooks/useConstraints';
+import { ConstraintInputBox } from './ConstraintInputBox';
 import { ConstraintMarkers } from './ConstraintMarkers';
+import type { ConstraintTarget } from '../constraints/ConstraintTypes';
 import { drawGrid } from '../utils/canvasDrawing';
 import './DrawingCanvas.css';
 
@@ -57,6 +60,16 @@ export const DrawingCanvas: React.FC = () => {
       strokes.forEach(stroke => store.addStroke(stroke));
     },
   });
+
+  // Constraint creation
+  const {
+    isCreating,
+    constraintType,
+    pendingTargets,
+    addTarget,
+    completeCreation,
+    cancelCreation
+  } = useConstraints();
 
   // Sync digital drawing state with commander
   useEffect(() => {
@@ -259,12 +272,44 @@ export const DrawingCanvas: React.FC = () => {
     };
   }, [store.renderer, store.zoom, store.panX, store.panY, store.strokes]);
 
+  // Constraint creation handlers
+  const handleConstraintMouseDown = useCallback((e: React.MouseEvent) => {
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const screenPoint = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const worldPoint = screenToWorld(screenPoint.x, screenPoint.y);
+    const snapped = applySnap(worldPoint);
+    
+    // Find element at point for constraint target
+    const element = useSelectTool({ screenToWorld }).findElementAtPoint(snapped.point, 'point');
+    
+    if (element) {
+      const target: ConstraintTarget = {
+        strokeId: element.strokeId,
+        segmentIndex: element.segmentIndex,
+        pointIndex: element.type === 'endpoint' ? 0 : undefined
+      };
+      addTarget(target);
+      
+      // If we have 2 targets, show input box
+      if (pendingTargets.length + 1 >= 2) {
+        // Will show input box in render
+      }
+    }
+  }, [screenToWorld, applySnap, addTarget, pendingTargets.length]);
+
   // Event routing
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button === 1 || (e.button === 0 && e.altKey)) {
       // Middle click or Alt+click for panning
       setIsPanning(true);
       setPanStart({ x: e.clientX, y: e.clientY });
+      return;
+    }
+
+    // Handle constraint creation
+    if (isCreating) {
+      handleConstraintMouseDown(e);
       return;
     }
 
@@ -277,7 +322,7 @@ export const DrawingCanvas: React.FC = () => {
     } else if (store.toolCategory === 'digital') {
       handleDigitalDown(e);
     }
-  }, [store.activeTool, store.toolCategory, handleSelectDown, handleMeasureDown, handleArtisticDown, handleDigitalDown]);
+  }, [isCreating, store.activeTool, store.toolCategory, handleConstraintMouseDown, handleSelectDown, handleMeasureDown, handleArtisticDown, handleDigitalDown]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (isPanning) {
@@ -354,7 +399,21 @@ export const DrawingCanvas: React.FC = () => {
           worldToScreen={worldToScreen}
         />
       </svg>
-      {/* Constraint input box will be added when constraint creation flow is implemented */}
+      
+      {/* Constraint input box for creation */}
+      {isCreating && pendingTargets.length >= 2 && (
+        <ConstraintInputBox
+          position={{ x: 100, y: 100 }}
+          currentValue={0}
+          unit={constraintType === 'angle' ? '°' : store.unit}
+          onConfirm={(value) => {
+            completeCreation(value);
+          }}
+          onCancel={() => {
+            cancelCreation();
+          }}
+        />
+      )}
     </div>
   );
 };
