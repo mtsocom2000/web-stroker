@@ -119,3 +119,6 @@ export interface ControlPointElement extends BaseSelectableElement {
 }
 
 export type SelectableElement = EndpointElement | SegmentElement | ArcElement | ControlPointElement;
+
+// Constraint types (re-export from constraints module)
+export type { Constraint, ConstraintType, ConstraintTarget } from './constraints/ConstraintTypes';
