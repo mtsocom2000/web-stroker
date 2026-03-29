@@ -2,7 +2,6 @@ import { useCallback, useRef, useState } from 'react';
 import { useDrawingStore } from '../store';
 import type { Point, Stroke, DigitalSegment, SelectableElement } from '../types';
 import { distance } from '../utils';
-import { useDrawingStore } from '../store';
 
 interface UseSelectToolOptions {
   screenToWorld: (x: number, y: number) => Point;
@@ -183,7 +182,7 @@ export function useSelectTool(options: UseSelectToolOptions): UseSelectToolRetur
       // Get constraints for this point
       const constraints = store.getConstraintsForPoint(
         selectedElementRef.current.strokeId,
-        selectedElementRef.current.pointIndex ?? 0
+        0 // TODO: Get point index from element
       );
       
       // Apply constraints if any
