@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Stroke, CanvasState, ToolCategory, ArtisticTool, DigitalTool, MeasureTool, Point, LengthUnit, AngleUnit } from './types';
+import type { Stroke, CanvasState, ToolCategory, ArtisticTool, DigitalTool, MeasureTool, Point, LengthUnit, AngleUnit, SelectableElement } from './types';
 import type { BrushType, BrushSettings } from './brush/presets';
 import type { FillRegion } from './fillRegion';
 
@@ -85,6 +85,12 @@ interface DrawingState {
   setHoveredDigitalElement: (element: DigitalElement | null) => void;
   hoveredDigitalStrokeId: string | null;
   setHoveredDigitalStrokeId: (id: string | null) => void;
+  
+  // Selection (new architecture)
+  selectedElements: SelectableElement[];
+  setSelectedElements: (elements: SelectableElement[]) => void;
+  activeTool: string;
+  setActiveTool: (tool: string) => void;
 
   // Strokes
   strokes: Stroke[];
@@ -258,6 +264,12 @@ export const useDrawingStore = create<DrawingState>((set) => {
     setHoveredDigitalElement: (element) => set({ hoveredDigitalElement: element }),
     hoveredDigitalStrokeId: null,
     setHoveredDigitalStrokeId: (id) => set({ hoveredDigitalStrokeId: id }),
+    
+    // Selection (new architecture)
+    selectedElements: [],
+    setSelectedElements: (elements) => set({ selectedElements: elements }),
+    activeTool: 'select',
+    setActiveTool: (tool) => set({ activeTool: tool }),
 
     strokes: [],
     fillRegions: [],
