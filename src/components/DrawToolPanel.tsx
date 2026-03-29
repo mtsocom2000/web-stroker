@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useDrawingStore } from '../store';
-import type { ArtisticTool, DigitalTool, LengthUnit, MeasureTool } from '../types';
+import type { ArtisticTool, DigitalTool, LengthUnit, MeasureTool, ConstraintTool } from '../types';
 import './DrawToolPanel.css';
 
 const UNIT_OPTIONS: { value: LengthUnit; label: string }[] = [
@@ -72,11 +72,12 @@ export const DrawToolPanel: React.FC = () => {
   const panelRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState<Position>({ x: 0, y: 0 });
-  const [activeTab, setActiveTab] = useState<'artistic' | 'digital'>('digital');
+  const [activeTab, setActiveTab] = useState<'artistic' | 'digital' | 'constraint'>('digital');
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     select: true,
     draw: true,
     measure: true,
+    constraint: true,
   });
   const [position, setPosition] = useState<Position>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -167,13 +168,25 @@ export const DrawToolPanel: React.FC = () => {
     }
   };
 
-  const handleTabChange = (tab: 'artistic' | 'digital') => {
-    setActiveTab(tab);
+  const handleConstraintTool = (tool: ConstraintTool) => {
+    store.clearMeasure();
+    store.setToolCategory('constraint');
+    store.setConstraintTool(tool);
+    store.setIsCreatingConstraint(true);
+    store.setConstraintType(tool);
+    store.clearConstraintTargets();
+  };
+
+  const handleTabChange = (tab: 'artistic' | 'digital' | 'constraint') => {
+    store.clearMeasure();
     if (tab === 'artistic') {
       store.setToolCategory('artistic');
+    } else if (tab === 'constraint') {
+      store.setToolCategory('constraint');
     } else {
       store.setToolCategory('digital');
     }
+    setActiveTab(tab);
   };
 
   const isToolActive = (tool: DigitalTool | MeasureTool): boolean => {
@@ -216,6 +229,12 @@ export const DrawToolPanel: React.FC = () => {
               onClick={() => handleTabChange('digital')}
             >
               Digital
+            </button>
+            <button
+              className={`drawtool-tab ${activeTab === 'constraint' ? 'active' : ''}`}
+              onClick={() => handleTabChange('constraint')}
+            >
+              Constraint
             </button>
           </div>
         </div>
@@ -447,6 +466,42 @@ export const DrawToolPanel: React.FC = () => {
               </div>
             </div>
           </>
+        )}
+
+        {/* Constraint Tab */}
+        {activeTab === 'constraint' && (
+          <div className="drawtool-tool-selector">
+            <div className="drawtool-panel-section">
+              <div className="drawtool-section-title">Constraint Type</div>
+              <button
+                className={`drawtool-tool-btn ${store.constraintTool === 'distance' ? 'active' : ''}`}
+                onClick={() => handleConstraintTool('distance')}
+                title="Distance constraint"
+              >
+                <span className="drawtool-tool-icon">📏</span>
+                <span className="drawtool-tool-label">Distance</span>
+              </button>
+              <button
+                className={`drawtool-tool-btn ${store.constraintTool === 'angle' ? 'active' : ''}`}
+                onClick={() => handleConstraintTool('angle')}
+                title="Angle constraint"
+              >
+                <span className="drawtool-tool-icon">📐</span>
+                <span className="drawtool-tool-label">Angle</span>
+              </button>
+              <button
+                className={`drawtool-tool-btn ${store.constraintTool === 'radius' ? 'active' : ''}`}
+                onClick={() => handleConstraintTool('radius')}
+                title="Radius constraint"
+              >
+                <span className="drawtool-tool-icon">⭕</span>
+                <span className="drawtool-tool-label">Radius</span>
+              </button>
+            </div>
+            <div className="drawtool-panel-section constraint-hint">
+              <span>Select 2 points to constrain</span>
+            </div>
+          </div>
         )}
       </div>
     </div>
