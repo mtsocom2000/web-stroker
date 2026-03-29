@@ -87,3 +87,35 @@ export interface DrawingData {
   timestamp: number;
   canvasState: CanvasState;
 }
+
+// Selectable element types for digital mode selection
+export interface BaseSelectableElement {
+  strokeId: string;
+  segmentIndex: number;
+}
+
+export interface EndpointElement extends BaseSelectableElement {
+  type: 'endpoint';
+  point: Point;
+}
+
+export interface SegmentElement extends BaseSelectableElement {
+  type: 'segment';
+}
+
+export interface ArcElement extends BaseSelectableElement {
+  type: 'arc';
+  arcData: {
+    center: Point;
+    radius: number;
+    startAngle: number;
+    endAngle: number;
+  };
+}
+
+export interface ControlPointElement extends BaseSelectableElement {
+  type: 'control-point';
+  point: Point;
+}
+
+export type SelectableElement = EndpointElement | SegmentElement | ArcElement | ControlPointElement;

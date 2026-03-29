@@ -1,15 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { useDrawingStore } from '../store';
-import type { Point, Stroke, DigitalSegment } from '../types';
+import type { Point, Stroke, DigitalSegment, SelectableElement } from '../types';
 import { distance } from '../utils';
-
-interface SelectableElement {
-  type: 'endpoint' | 'segment' | 'arc' | 'control-point';
-  strokeId: string;
-  segmentIndex: number;
-  point?: Point;
-  arcData?: { center: Point; radius: number; startAngle: number; endAngle: number };
-}
 
 interface UseSelectToolOptions {
   screenToWorld: (x: number, y: number) => Point;
