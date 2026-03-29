@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Stroke, CanvasState, ToolCategory, ArtisticTool, DigitalTool, MeasureTool, Point, LengthUnit, AngleUnit, SelectableElement, Constraint, ConstraintType, ConstraintTarget } from './types';
+import type { Stroke, CanvasState, ToolCategory, ArtisticTool, DigitalTool, MeasureTool, Point, LengthUnit, AngleUnit, SelectableElement, Constraint, ConstraintType, ConstraintTarget, ConstraintTool } from './types';
 import type { BrushType, BrushSettings } from './brush/presets';
 import type { FillRegion } from './fillRegion';
 import { ConstraintManager } from './constraints/ConstraintManager';
@@ -76,6 +76,10 @@ interface DrawingState {
   clearCurrentMeasurement: () => void;
   drawingClearCounter: number;
   incrementClearCounter: () => void;
+
+  // Constraint Tool
+  constraintTool: ConstraintTool | null;
+  setConstraintTool: (tool: ConstraintTool | null) => void;
 
   // Digital Selection
   selectedDigitalStrokeIds: string[];
@@ -264,11 +268,15 @@ export const useDrawingStore = create<DrawingState>((set) => {
       measureFirstLine: null,
       measureSecondLine: null,
       measureFaceId: null,
-      lastMeasureValue: '--',
+      lastMeasureValue: '--'
     })),
     clearCurrentMeasurement: () => set({ measureStartPoint: null, measureEndPoint: null, measureFirstLine: null, measureSecondLine: null, measureFaceId: null, lastMeasureValue: '--' }),
     drawingClearCounter: 0,
     incrementClearCounter: () => set((state) => ({ drawingClearCounter: state.drawingClearCounter + 1 })),
+    
+    // Constraint Tool
+    constraintTool: null,
+    setConstraintTool: (tool) => set({ constraintTool: tool }),
 
     // Mode (backward compatibility)
     mode: 'select',
