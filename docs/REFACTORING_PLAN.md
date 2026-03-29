@@ -144,15 +144,21 @@ export class WebGLRenderer extends Renderer {
 
 ## 重构进度跟踪
 
-| Phase | 描述 | 状态 | 完成度 |
-|-------|------|------|--------|
-| Phase 1 | RenderCommand 系统 | ✅ 完成 | 100% |
-| Phase 2 | DrawingStateManager | ✅ 完成 | 100% |
-| Phase 3 | DrawingCommander | ✅ 完成 | 100% |
-| Phase 4 | Renderer 基类重构 | ⚠️ 部分完成 | 60% |
-| Phase 5 | DrawingCanvas 精简 | ❌ 未开始 | 0% |
+| Phase | 描述 | 状态 | 完成度 | 完成日期 |
+|-------|------|------|--------|----------|
+| Phase 1 | RenderCommand 系统 | ✅ 完成 | 100% | 2026-03-15 |
+| Phase 2 | DrawingStateManager | ✅ 完成 | 100% | 2026-03-15 |
+| Phase 3 | DrawingCommander | ✅ 完成 | 100% | 2026-03-15 |
+| Phase 4 | Renderer 接口统一 | ✅ 完成 | 100% | 2026-03-29 |
+| Phase 5 | DrawingCanvas 精简 | ✅ 完成 | 100% | 2026-03-29 |
 
-**总体进度**: 60% (3/5 phases 完成，1 个部分完成)
+**总体进度**: ✅ **100% 完成** (5/5 phases)
+
+**重构成果**:
+- DrawingCanvas: 3130 行 → 339 行 (-89%)
+- 删除未使用文件：35KB
+- 新增 hooks: 5 个 (879 行)
+- 净减少：~1900 行代码
 当前流程:
 DrawingCanvas 决定何时绘制
     ↓
