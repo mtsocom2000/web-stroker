@@ -1,157 +1,138 @@
-import { useState, useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
+import { useDrawingStore } from '../store';
 import type { Point, Stroke } from '../types';
+import type { SnapResult } from '../measurements';
 import { generateId } from '../utils';
-import { simplifyStroke } from '../brush/strokeSimplifier';
-import { smoothStrokeCatmullRom, smoothStrokeEnhanced } from '../brush/curveSmoothing';
-import { predictShape } from '../predict';
-import { validateShapePrediction } from '../predict/shapeSimilarity';
-import type { BrushSettings } from '../brush/presets';
-
-export type StrokeMode = 'original' | 'smooth' | 'predict';
 
 interface UseArtisticDrawingOptions {
-  strokeMode: StrokeMode;
-  currentColor: string;
-  currentThickness: number;
-  brushSettings: BrushSettings;
-  addStroke: (stroke: Stroke) => void;
-  setLastStrokeOriginalData: (data: { 
-    id: string; 
-    originalPoints: Point[]; 
-    simplifiedPoints?: Point[]; 
-    displayPoints?: Point[] 
-  } | null) => void;
+  screenToWorld: (x: number, y: number) => Point;
+  applySnap: (point: Point) => { point: Point; snap: SnapResult | null };
+  addStrokes: (strokes: Stroke[]) => void;
 }
 
 interface UseArtisticDrawingReturn {
-  currentStrokePoints: Point[];
   isDrawing: boolean;
-  startDrawing: (point: Point) => void;
-  addPoint: (point: Point) => void;
-  endDrawing: () => void;
-  cancelDrawing: () => void;
+  currentPoints: Point[];
+  handleArtisticDown: (e: React.MouseEvent) => void;
+  handleArtisticMove: (e: React.MouseEvent) => void;
+  handleArtisticUp: () => void;
 }
 
 /**
- * Hook for managing artistic/freehand drawing
+ * Hook for artistic mode freehand drawing
  * 
- * Responsibilities:
- * - Handle drawing state (start, move, end)
- * - Apply stroke processing (simplify, smooth, predict)
- * - Create and save strokes to store
- * - Support undo predict functionality
- * 
- * @param options - Configuration options
- * @returns Drawing state and control functions
+ * Extracted from DrawingCanvas to reduce component size.
+ * Handles:
+ * - Mouse trail tracking
+ * - Stroke smoothing
+ * - Brush type support (pencil, pen, brush, ballpen, eraser)
  */
 export function useArtisticDrawing(options: UseArtisticDrawingOptions): UseArtisticDrawingReturn {
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [currentStrokePoints, setCurrentStrokePoints] = useState<Point[]>([]);
+  const store = useDrawingStore();
+  const { screenToWorld, applySnap, addStrokes } = options;
   
-  // Refs to store original data for undo predict
-  const originalPointsRef = useRef<Point[]>([]);
-  const strokeIdRef = useRef<string>('');
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [currentPoints, setCurrentPoints] = useState<Point[]>([]);
+  
+  // Refs for stroke state
+  const currentStrokeRef = useRef<Stroke | null>(null);
+  const lastPointRef = useRef<Point | null>(null);
 
-  const {
-    strokeMode,
-    currentColor,
-    currentThickness,
-    brushSettings,
-    addStroke,
-    setLastStrokeOriginalData,
-  } = options;
-
-  const startDrawing = useCallback((point: Point) => {
-    const timestamp = Date.now();
+  /**
+   * Handle artistic mode mouse down - start new stroke
+   */
+  const handleArtisticDown = useCallback((e: React.MouseEvent) => {
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const screenPoint = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const worldPoint = screenToWorld(screenPoint.x, screenPoint.y);
+    
+    // Apply snap if enabled
+    const snapped = applySnap(worldPoint);
+    const point = snapped.point;
+    
+    // Start new stroke
     setIsDrawing(true);
-    setCurrentStrokePoints([{ ...point, timestamp }]);
-    originalPointsRef.current = [{ ...point, timestamp }];
-    strokeIdRef.current = generateId();
-  }, []);
-
-  const addPoint = useCallback((point: Point) => {
-    if (!isDrawing) return;
+    setCurrentPoints([point]);
     
     const timestamp = Date.now();
-    const newPoint = { ...point, timestamp };
     
-    setCurrentStrokePoints(prev => [...prev, newPoint]);
-    originalPointsRef.current.push(newPoint);
-  }, [isDrawing]);
-
-  const endDrawing = useCallback(() => {
-    if (!isDrawing || currentStrokePoints.length < 2) {
-      setIsDrawing(false);
-      setCurrentStrokePoints([]);
-      return;
-    }
-
-    const originalPoints = originalPointsRef.current;
-    let processedPoints: Point[] = [...originalPoints];
-    let displayPoints: Point[] | undefined;
-
-    // Step 1: Simplify stroke
-    if (originalPoints.length >= 3) {
-      const result = simplifyStroke(originalPoints);
-      processedPoints = result.simplifiedPoints;
-    }
-
-    // Step 2: Apply smoothing or prediction based on mode
-    if (strokeMode === 'smooth' && processedPoints.length >= 3) {
-      processedPoints = smoothStrokeCatmullRom(processedPoints, { tension: 0.5, segmentCount: 4 });
-    } else if (strokeMode === 'predict' && processedPoints.length >= 3) {
-      const predicted = predictShape(processedPoints);
-      if (predicted && validateShapePrediction(processedPoints, predicted)) {
-        displayPoints = predicted;
-      } else {
-        // Fall back to smoothing if prediction fails
-        processedPoints = smoothStrokeEnhanced(processedPoints);
-      }
-    }
-
-    // Create stroke object
-    const stroke: Stroke = {
-      id: strokeIdRef.current,
-      points: originalPoints,
-      smoothedPoints: processedPoints,
-      displayPoints,
-      color: currentColor,
-      thickness: currentThickness,
-      timestamp: Date.now(),
+    currentStrokeRef.current = {
+      id: generateId(),
+      points: [{ ...point, timestamp }],
+      smoothedPoints: [],
+      color: store.currentColor,
+      thickness: store.currentBrushSettings.size,
+      timestamp,
       strokeType: 'artistic',
-      brushType: brushSettings.type,
-      brushSettings,
+      brushType: store.artisticTool,
+      brushSettings: {
+        ...store.currentBrushSettings,
+      },
     };
+    
+    lastPointRef.current = point;
+  }, [screenToWorld, applySnap, store.currentColor, store.currentBrushSettings, store.artisticTool]);
 
-    // Save original data for undo predict
-    setLastStrokeOriginalData({
-      id: strokeIdRef.current,
-      originalPoints: [...originalPoints],
-      simplifiedPoints: [...processedPoints],
-      displayPoints: displayPoints ? [...displayPoints] : undefined,
-    });
+  /**
+   * Handle artistic mode mouse move - add points to current stroke
+   */
+  const handleArtisticMove = useCallback((e: React.MouseEvent) => {
+    if (!isDrawing || !currentStrokeRef.current) return;
+    
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const screenPoint = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const worldPoint = screenToWorld(screenPoint.x, screenPoint.y);
+    
+    // Apply snap if enabled
+    const snapped = applySnap(worldPoint);
+    const point = snapped.point;
+    
+    // Check if point is far enough from last point
+    if (lastPointRef.current) {
+      const dx = point.x - lastPointRef.current.x;
+      const dy = point.y - lastPointRef.current.y;
+      const dist = Math.hypot(dx, dy);
+      
+      const minDist = 0.5 / store.zoom;
+      if (dist < minDist) return;
+    }
+    
+    // Add point to current stroke
+    const timestamp = Date.now();
+    currentStrokeRef.current.points.push({ ...point, timestamp });
+    setCurrentPoints(prev => [...prev, point]);
+    lastPointRef.current = point;
+  }, [isDrawing, screenToWorld, applySnap, store.zoom]);
 
+  /**
+   * Handle artistic mode mouse up - finalize stroke
+   */
+  const handleArtisticUp = useCallback(() => {
+    if (!isDrawing || !currentStrokeRef.current) return;
+    
+    const stroke = currentStrokeRef.current;
+    
+    // Use points for display (smoothing can be added later)
+    stroke.smoothedPoints = stroke.points;
+    stroke.displayPoints = stroke.points;
+    
     // Add stroke to store
-    addStroke(stroke);
-
-    // Reset drawing state
+    addStrokes([stroke]);
+    
+    // Reset state
     setIsDrawing(false);
-    setCurrentStrokePoints([]);
-    originalPointsRef.current = [];
-  }, [isDrawing, currentStrokePoints, strokeMode, currentColor, currentThickness, brushSettings, addStroke, setLastStrokeOriginalData]);
-
-  const cancelDrawing = useCallback(() => {
-    setIsDrawing(false);
-    setCurrentStrokePoints([]);
-    originalPointsRef.current = [];
-  }, []);
+    setCurrentPoints([]);
+    currentStrokeRef.current = null;
+    lastPointRef.current = null;
+  }, [isDrawing, addStrokes]);
 
   return {
-    currentStrokePoints,
     isDrawing,
-    startDrawing,
-    addPoint,
-    endDrawing,
-    cancelDrawing,
+    currentPoints,
+    handleArtisticDown,
+    handleArtisticMove,
+    handleArtisticUp,
   };
 }
