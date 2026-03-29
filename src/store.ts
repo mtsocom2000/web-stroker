@@ -1,7 +1,8 @@
 import { create } from 'zustand';
-import type { Stroke, CanvasState, ToolCategory, ArtisticTool, DigitalTool, MeasureTool, Point, LengthUnit, AngleUnit, SelectableElement } from './types';
+import type { Stroke, CanvasState, ToolCategory, ArtisticTool, DigitalTool, MeasureTool, Point, LengthUnit, AngleUnit, SelectableElement, Constraint } from './types';
 import type { BrushType, BrushSettings } from './brush/presets';
 import type { FillRegion } from './fillRegion';
+import { ConstraintManager } from './constraints/ConstraintManager';
 
 /** Stroke processing mode: original, smooth, or predict */
 export type StrokeMode = 'original' | 'smooth' | 'predict';
@@ -91,6 +92,14 @@ interface DrawingState {
   setSelectedElements: (elements: SelectableElement[]) => void;
   activeTool: string;
   setActiveTool: (tool: string) => void;
+
+  // Constraints
+  constraints: Constraint[];
+  constraintManager: ConstraintManager;
+  addConstraint: (constraint: Constraint) => void;
+  removeConstraint: (id: string) => void;
+  updateConstraint: (id: string, value: number) => void;
+  getConstraintsForPoint: (strokeId: string, pointIndex: number) => Constraint[];
 
   // Strokes
   strokes: Stroke[];
@@ -270,6 +279,25 @@ export const useDrawingStore = create<DrawingState>((set) => {
     setSelectedElements: (elements) => set({ selectedElements: elements }),
     activeTool: 'select',
     setActiveTool: (tool) => set({ activeTool: tool }),
+
+    // Constraints
+    constraints: [],
+    constraintManager: new ConstraintManager(),
+    addConstraint: (constraint) => set((state) => {
+      state.constraintManager.addConstraint(constraint);
+      return { constraints: state.constraintManager.getConstraints() };
+    }),
+    removeConstraint: (id) => set((state) => {
+      state.constraintManager.removeConstraint(id);
+      return { constraints: state.constraintManager.getConstraints() };
+    }),
+    updateConstraint: (id, value) => set((state) => {
+      state.constraintManager.updateConstraint(id, value);
+      return { constraints: state.constraintManager.getConstraints() };
+    }),
+    getConstraintsForPoint: (strokeId: string, pointIndex: number): Constraint[] => {
+      return useDrawingStore.getState().constraintManager.getConstraintsForTarget(strokeId, pointIndex);
+    },
 
     strokes: [],
     fillRegions: [],
