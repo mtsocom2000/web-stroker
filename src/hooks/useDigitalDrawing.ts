@@ -1,345 +1,203 @@
-import { useState, useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
+import { useDrawingStore } from '../store';
 import type { Point, Stroke, DigitalSegment } from '../types';
+import type { SnapResult } from '../measurements';
 import { generateId } from '../utils';
 
-export type DigitalTool = 'line' | 'circle' | 'arc' | 'curve';
-export type CircleCreationMode = 'centerRadius' | 'threePoint';
-
 interface UseDigitalDrawingOptions {
-  currentColor: string;
-  currentThickness: number;
-  snapEnabled: boolean;
-  snapThreshold: number;
-  circleCreationMode: CircleCreationMode;
-  addStroke: (stroke: Stroke) => void;
+  screenToWorld: (x: number, y: number) => Point;
+  applySnap: (point: Point) => { point: Point; snap: SnapResult | null };
+  addStrokes: (strokes: Stroke[]) => void;
 }
 
 interface UseDigitalDrawingReturn {
-  // State
-  digitalLinePoints: Point[];
-  digitalLinePreviewEnd: Point | null;
+  linePoints: Point[];
   circleCenter: Point | null;
   circleRadiusPoint: Point | null;
-  circlePoints: Point[];
   arcPoints: Point[];
   arcRadiusPoint: Point | null;
   curvePoints: Point[];
-  isDrawing: boolean;
-  
-  // Actions
-  startLine: (point: Point) => void;
-  addLinePoint: (point: Point) => void;
-  updateLinePreview: (point: Point) => void;
-  endLine: () => void;
-  
-  startCircle: (point: Point) => void;
-  updateCircleRadius: (point: Point) => void;
-  addCirclePoint: (point: Point) => void;
-  endCircle: () => void;
-  
-  startArc: (point: Point) => void;
-  addArcPoint: (point: Point) => void;
-  updateArcPreview: (point: Point) => void;
-  endArc: () => void;
-  
-  startCurve: (point: Point) => void;
-  addCurvePoint: (point: Point) => void;
-  updateCurvePreview: (point: Point) => void;
-  endCurve: () => void;
-  
-  cancelDrawing: () => void;
+  handleDigitalDown: (e: React.MouseEvent) => void;
+  handleDigitalMove: (e: React.MouseEvent) => void;
+  handleDigitalUp: () => void;
 }
 
 /**
- * Hook for managing digital/precision drawing (lines, circles, arcs, curves)
- * 
- * Responsibilities:
- * - Handle state for different digital tools (line, circle, arc, curve)
- * - Manage multi-point drawing sequences
- * - Create digital strokes with segments
- * - Support snapping and preview
- * 
- * @param options - Configuration options
- * @returns Drawing state and control functions
+ * Hook for digital mode precision drawing
+ * Handles line, circle, arc, and curve tools
  */
 export function useDigitalDrawing(options: UseDigitalDrawingOptions): UseDigitalDrawingReturn {
-  const [digitalLinePoints, setDigitalLinePoints] = useState<Point[]>([]);
-  const [digitalLinePreviewEnd, setDigitalLinePreviewEnd] = useState<Point | null>(null);
+  const store = useDrawingStore();
+  const { screenToWorld, applySnap, addStrokes } = options;
+  
+  // State for previews
+  const [linePoints, setLinePoints] = useState<Point[]>([]);
   const [circleCenter, setCircleCenter] = useState<Point | null>(null);
   const [circleRadiusPoint, setCircleRadiusPoint] = useState<Point | null>(null);
-  const [circlePoints, setCirclePoints] = useState<Point[]>([]);
   const [arcPoints, setArcPoints] = useState<Point[]>([]);
   const [arcRadiusPoint, setArcRadiusPoint] = useState<Point | null>(null);
   const [curvePoints, setCurvePoints] = useState<Point[]>([]);
-  const [isDrawing, setIsDrawing] = useState(false);
   
-  const currentToolRef = useRef<DigitalTool | null>(null);
+  // Refs for tool state
+  const digitalToolRef = useRef<string | null>(null);
+  const clickCountRef = useRef(0);
+  const firstPointRef = useRef<Point | null>(null);
 
-  const {
-    currentColor,
-    currentThickness,
-    addStroke,
-  } = options;
-
-  // Line drawing
-  const startLine = useCallback((point: Point) => {
-    setDigitalLinePoints([point]);
-    setDigitalLinePreviewEnd(null);
-    setIsDrawing(true);
-    currentToolRef.current = 'line';
-  }, []);
-
-  const addLinePoint = useCallback((point: Point) => {
-    setDigitalLinePoints(prev => [...prev, point]);
-  }, []);
-
-  const updateLinePreview = useCallback((point: Point) => {
-    setDigitalLinePreviewEnd(point);
-  }, []);
-
-  const endLine = useCallback(() => {
-    if (digitalLinePoints.length < 2) {
-      cancelDrawing();
-      return;
-    }
-
-    const segment: DigitalSegment = {
-      id: generateId(),
-      type: 'line',
-      points: [...digitalLinePoints],
-      color: currentColor,
-    };
-
-    const stroke: Stroke = {
-      id: generateId(),
-      points: [...digitalLinePoints],
-      smoothedPoints: [...digitalLinePoints],
-      color: currentColor,
-      thickness: currentThickness,
-      timestamp: Date.now(),
-      strokeType: 'digital',
-      digitalSegments: [segment],
-    };
-
-    addStroke(stroke);
-    cancelDrawing();
-  }, [digitalLinePoints, currentColor, currentThickness, addStroke]);
-
-  // Circle drawing
-  const startCircle = useCallback((point: Point) => {
-    setCircleCenter(point);
-    setCircleRadiusPoint(null);
-    setCirclePoints([point]);
-    setIsDrawing(true);
-    currentToolRef.current = 'circle';
-  }, []);
-
-  const updateCircleRadius = useCallback((point: Point) => {
-    setCircleRadiusPoint(point);
-  }, []);
-
-  const addCirclePoint = useCallback((point: Point) => {
-    setCirclePoints(prev => [...prev, point]);
-  }, []);
-
-  const endCircle = useCallback(() => {
-    if (!circleCenter || !circleRadiusPoint) {
-      cancelDrawing();
-      return;
-    }
-
-    const radius = Math.hypot(
-      circleRadiusPoint.x - circleCenter.x,
-      circleRadiusPoint.y - circleCenter.y
-    );
-
-    const segment: DigitalSegment = {
-      id: generateId(),
-      type: 'arc',
-      points: [],
-      color: currentColor,
-      arcData: {
-        center: circleCenter,
-        radius,
-        startAngle: 0,
-        endAngle: Math.PI * 2,
-      },
-    };
-
-    const stroke: Stroke = {
-      id: generateId(),
-      points: [circleCenter, circleRadiusPoint],
-      smoothedPoints: [circleCenter, circleRadiusPoint],
-      color: currentColor,
-      thickness: currentThickness,
-      timestamp: Date.now(),
-      strokeType: 'digital',
-      digitalSegments: [segment],
-    };
-
-    addStroke(stroke);
-    cancelDrawing();
-  }, [circleCenter, circleRadiusPoint, currentColor, currentThickness, addStroke]);
-
-  // Arc drawing
-  const startArc = useCallback((point: Point) => {
-    setArcPoints([point]);
-    setArcRadiusPoint(null);
-    setIsDrawing(true);
-    currentToolRef.current = 'arc';
-  }, []);
-
-  const addArcPoint = useCallback((point: Point) => {
-    setArcPoints(prev => {
-      const newPoints = [...prev, point];
-      return newPoints;
-    });
-  }, []);
-
-  const updateArcPreview = useCallback((point: Point) => {
-    setArcRadiusPoint(point);
-  }, []);
-
-  const endArc = useCallback(() => {
-    if (arcPoints.length < 2) {
-      cancelDrawing();
-      return;
-    }
-
-    const center = arcPoints[0];
-    const startPoint = arcPoints[1];
-    const radius = Math.hypot(startPoint.x - center.x, startPoint.y - center.y);
+  /**
+   * Handle digital mode mouse down
+   */
+  const handleDigitalDown = useCallback((e: React.MouseEvent) => {
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const screenPoint = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const worldPoint = screenToWorld(screenPoint.x, screenPoint.y);
     
-    // Calculate angles
-    const startAngle = Math.atan2(startPoint.y - center.y, startPoint.x - center.x);
-    let endAngle = startAngle + Math.PI / 2; // Default 90 degrees
+    const snapped = applySnap(worldPoint);
+    const point = snapped.point;
     
-    if (arcPoints.length >= 3) {
-      const endPoint = arcPoints[2];
-      endAngle = Math.atan2(endPoint.y - center.y, endPoint.x - center.x);
+    const tool = store.digitalTool;
+    digitalToolRef.current = tool;
+    
+    if (tool === 'line') {
+      if (clickCountRef.current === 0) {
+        clickCountRef.current = 1;
+        firstPointRef.current = point;
+        setLinePoints([point]);
+      } else {
+        if (firstPointRef.current) {
+          const stroke: Stroke = createDigitalStroke('line', [firstPointRef.current, point], store);
+          addStrokes([stroke]);
+        }
+        clickCountRef.current = 0;
+        firstPointRef.current = null;
+        setLinePoints([]);
+      }
+    } else if (tool === 'circle') {
+      if (clickCountRef.current === 0) {
+        clickCountRef.current = 1;
+        setCircleCenter(point);
+      } else {
+        if (circleCenter) {
+          const radius = Math.hypot(point.x - circleCenter.x, point.y - circleCenter.y);
+          const stroke: Stroke = createDigitalStroke('circle', [circleCenter, point], store, {
+            center: circleCenter,
+            radius,
+            startAngle: 0,
+            endAngle: Math.PI * 2,
+          });
+          addStrokes([stroke]);
+        }
+        clickCountRef.current = 0;
+        setCircleCenter(null);
+        setCircleRadiusPoint(null);
+      }
+    } else if (tool === 'arc') {
+      if (clickCountRef.current === 0) {
+        clickCountRef.current = 1;
+        setArcPoints([point]);
+      } else if (clickCountRef.current === 1) {
+        clickCountRef.current = 2;
+        setArcPoints(prev => [...prev, point]);
+      } else {
+        if (arcPoints.length >= 2) {
+          const center = arcPoints[0];
+          const startPoint = arcPoints[1];
+          const radius = Math.hypot(startPoint.x - center.x, startPoint.y - center.y);
+          const startAngle = Math.atan2(startPoint.y - center.y, startPoint.x - center.x);
+          const endAngle = Math.atan2(point.y - center.y, point.x - center.x);
+          
+          const stroke: Stroke = createDigitalStroke('arc', arcPoints, store, {
+            center,
+            radius,
+            startAngle,
+            endAngle,
+          });
+          addStrokes([stroke]);
+        }
+        clickCountRef.current = 0;
+        setArcPoints([]);
+        setArcRadiusPoint(null);
+      }
+    } else if (tool === 'curve') {
+      const newCurvePoints = [...curvePoints, point];
+      setCurvePoints(newCurvePoints);
+      
+      if (newCurvePoints.length >= 4) {
+        const stroke: Stroke = createDigitalStroke('bezier', newCurvePoints, store);
+        addStrokes([stroke]);
+        setCurvePoints([]);
+      }
     }
+  }, [screenToWorld, applySnap, store.digitalTool, store, addStrokes, circleCenter, arcPoints, curvePoints]);
 
-    const segment: DigitalSegment = {
-      id: generateId(),
-      type: 'arc',
-      points: [...arcPoints],
-      color: currentColor,
-      arcData: {
-        center,
-        radius,
-        startAngle,
-        endAngle,
-      },
-    };
-
-    const stroke: Stroke = {
-      id: generateId(),
-      points: [...arcPoints],
-      smoothedPoints: [...arcPoints],
-      color: currentColor,
-      thickness: currentThickness,
-      timestamp: Date.now(),
-      strokeType: 'digital',
-      digitalSegments: [segment],
-    };
-
-    addStroke(stroke);
-    cancelDrawing();
-  }, [arcPoints, currentColor, currentThickness, addStroke]);
-
-  // Curve (Bezier) drawing
-  const startCurve = useCallback((point: Point) => {
-    setCurvePoints([point]);
-    setIsDrawing(true);
-    currentToolRef.current = 'curve';
-  }, []);
-
-  const addCurvePoint = useCallback((point: Point) => {
-    setCurvePoints(prev => {
-      if (prev.length >= 4) return prev; // Max 4 points for cubic bezier
-      return [...prev, point];
-    });
-  }, []);
-
-  const updateCurvePreview = useCallback((_point: Point) => {
-    // For curve, we just track the last mouse position
-    // Actual point is added on click
-  }, []);
-
-  const endCurve = useCallback(() => {
-    if (curvePoints.length < 2) {
-      cancelDrawing();
-      return;
+  /**
+   * Handle digital mode mouse move - update preview
+   */
+  const handleDigitalMove = useCallback((e: React.MouseEvent) => {
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const screenPoint = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const worldPoint = screenToWorld(screenPoint.x, screenPoint.y);
+    
+    const snapped = applySnap(worldPoint);
+    const point = snapped.point;
+    
+    const tool = digitalToolRef.current;
+    
+    if (tool === 'line' && clickCountRef.current === 1 && firstPointRef.current) {
+      setLinePoints([firstPointRef.current, point]);
+    } else if (tool === 'circle' && clickCountRef.current === 1 && circleCenter) {
+      setCircleRadiusPoint(point);
+    } else if (tool === 'arc' && clickCountRef.current === 2 && arcPoints.length >= 2) {
+      setArcRadiusPoint(point);
     }
+  }, [screenToWorld, applySnap, circleCenter, arcPoints]);
 
-    // Ensure we have at least 4 points for cubic bezier
-    const points = [...curvePoints];
-    while (points.length < 4) {
-      const lastPoint = points[points.length - 1];
-      points.push({ ...lastPoint });
-    }
-
-    const segment: DigitalSegment = {
-      id: generateId(),
-      type: 'bezier',
-      points: points.slice(0, 4),
-      color: currentColor,
-    };
-
-    const stroke: Stroke = {
-      id: generateId(),
-      points: [...curvePoints],
-      smoothedPoints: [...curvePoints],
-      color: currentColor,
-      thickness: currentThickness,
-      timestamp: Date.now(),
-      strokeType: 'digital',
-      digitalSegments: [segment],
-    };
-
-    addStroke(stroke);
-    cancelDrawing();
-  }, [curvePoints, currentColor, currentThickness, addStroke]);
-
-  const cancelDrawing = useCallback(() => {
-    setDigitalLinePoints([]);
-    setDigitalLinePreviewEnd(null);
-    setCircleCenter(null);
-    setCircleRadiusPoint(null);
-    setCirclePoints([]);
-    setArcPoints([]);
-    setArcRadiusPoint(null);
-    setCurvePoints([]);
-    setIsDrawing(false);
-    currentToolRef.current = null;
+  /**
+   * Handle digital mode mouse up
+   */
+  const handleDigitalUp = useCallback(() => {
+    // Cleanup if needed
   }, []);
 
   return {
-    digitalLinePoints,
-    digitalLinePreviewEnd,
+    linePoints,
     circleCenter,
     circleRadiusPoint,
-    circlePoints,
     arcPoints,
     arcRadiusPoint,
     curvePoints,
-    isDrawing,
-    startLine,
-    addLinePoint,
-    updateLinePreview,
-    endLine,
-    startCircle,
-    updateCircleRadius,
-    addCirclePoint,
-    endCircle,
-    startArc,
-    addArcPoint,
-    updateArcPreview,
-    endArc,
-    startCurve,
-    addCurvePoint,
-    updateCurvePreview,
-    endCurve,
-    cancelDrawing,
+    handleDigitalDown,
+    handleDigitalMove,
+    handleDigitalUp,
+  };
+}
+
+function createDigitalStroke(
+  type: 'line' | 'circle' | 'arc' | 'bezier',
+  points: Point[],
+  store: any,
+  arcData?: { center: Point; radius: number; startAngle: number; endAngle: number }
+): Stroke {
+  let segment: DigitalSegment;
+  
+  if (type === 'line') {
+    segment = { id: generateId(), type: 'line', points, color: store.currentColor };
+  } else if (type === 'circle' || type === 'arc') {
+    segment = { id: generateId(), type: 'arc', points, color: store.currentColor, arcData: arcData! };
+  } else {
+    segment = { id: generateId(), type: 'bezier', points, color: store.currentColor };
+  }
+  
+  return {
+    id: generateId(),
+    points,
+    smoothedPoints: points,
+    displayPoints: points,
+    color: store.currentColor,
+    thickness: store.currentBrushSettings.size,
+    timestamp: Date.now(),
+    strokeType: 'digital',
+    digitalSegments: [segment],
   };
 }
