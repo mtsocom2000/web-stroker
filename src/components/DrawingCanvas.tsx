@@ -403,7 +403,7 @@ export const DrawingCanvas: React.FC = () => {
       {/* Constraint input box for creation */}
       {isCreating && pendingTargets.length >= 2 && (
         <ConstraintInputBox
-          position={{ x: 100, y: 100 }}
+          position={{ x: window.innerWidth / 2, y: window.innerHeight / 2 }}
           currentValue={0}
           unit={constraintType === 'angle' ? '°' : store.unit}
           onConfirm={(value) => {
