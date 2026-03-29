@@ -1,7 +1,9 @@
 import * as THREE from 'three';
-import type { Point, Stroke } from '../types';
-import type { Renderer } from './Renderer';
+import type { Point } from '../types';
+import { Renderer } from './Renderer';
+import type { RenderCommand, Geometry, RenderStyle } from './commands/RenderCommand';
 import { worldToScreen as worldToScreenUtil, screenToWorld as screenToWorldUtil } from '../utils/coordinates';
+import { VISUAL_THEME } from './RendererConfig';
 
 // Visual constants - unified with Canvas2D
 const VISUAL = {
@@ -31,41 +33,32 @@ interface ViewState {
   panY: number;
 }
 
-// Track rendered IDs for efficient sync
-interface StrokeBatch {
-  color: string;
-  thickness: number;
-  instancedMesh: THREE.InstancedMesh;
-  strokeIds: string[];
-  matrices: Map<string, THREE.Matrix4[]>;
-}
-
 /**
  * WebGL/Three.js implementation of Renderer
- * Uses WebGL for hardware-accelerated rendering
+ * Extends Renderer base class to execute RenderCommands.
+ * Uses WebGL for hardware-accelerated rendering.
+ *
+ * Key features:
+ * 1. Hardware-accelerated rendering via Three.js
+ * 2. Instanced rendering for performance
+ * 3. Proper z-depth layering
+ * 4. Dashed line support via LineDashedMaterial
  */
-export class WebGLRenderer implements Renderer {
+export class WebGLRenderer extends Renderer {
   private container: HTMLElement | null = null;
   private scene: THREE.Scene | null = null;
   private camera: THREE.OrthographicCamera | null = null;
   private renderer: THREE.WebGLRenderer | null = null;
   private viewState: ViewState = { zoom: 1, panX: 0, panY: 0 };
   
-  // Stroke management
-  private strokeMeshes: Map<string, THREE.Mesh[]> = new Map();
-  private digitalStrokeMeshes: Map<string, THREE.Object3D[]> = new Map();
-  private currentStrokeObject: THREE.Object3D | null = null;
-  private renderedArtisticIds: Set<string> = new Set();
-  private renderedDigitalIds: Set<string> = new Set();
-  private strokeBatches: Map<string, StrokeBatch> = new Map();
-  
-  // Highlight management
+  // Object tracking for cleanup
+  private strokeObjects: THREE.Object3D[] = [];
+  private previewObjects: THREE.Object3D[] = [];
   private highlightObjects: THREE.Object3D[] = [];
   private indicatorObjects: THREE.Object3D[] = [];
-  
-  // Configuration
-  private useInstancing: boolean = true;
-  private maxInstancesPerBatch: number = 1000;
+  private closedAreaObjects: THREE.Object3D[] = [];
+  private labelObjects: THREE.Object3D[] = [];
+  private gridObject: THREE.Object3D | null = null;
 
   initialize(container: HTMLElement): void {
     this.container = container;
@@ -75,7 +68,6 @@ export class WebGLRenderer implements Renderer {
     // No background - transparent to show 2D canvas underneath
     
     // Create camera
-    // Use container height as frustum size for 1:1 world-to-screen mapping at zoom=1
     const aspect = container.clientWidth / container.clientHeight;
     const frustumSize = container.clientHeight;
     this.camera = new THREE.OrthographicCamera(
@@ -111,7 +103,7 @@ export class WebGLRenderer implements Renderer {
   }
 
   dispose(): void {
-    this.clearStrokes();
+    this.clearAllObjects();
     
     if (this.renderer && this.container) {
       this.renderer.dispose();
@@ -129,7 +121,6 @@ export class WebGLRenderer implements Renderer {
     const width = this.container.clientWidth;
     const height = this.container.clientHeight;
     const aspect = width / height;
-    // frustumSize based on height for 1:1 mapping at zoom=1
     const frustumSize = height / this.viewState.zoom;
     
     this.camera.left = -frustumSize * aspect / 2 + this.viewState.panX;
@@ -141,12 +132,6 @@ export class WebGLRenderer implements Renderer {
     this.renderer.setSize(width, height);
   }
 
-  render(): void {
-    if (this.renderer && this.scene && this.camera) {
-      this.renderer.render(this.scene, this.camera);
-    }
-  }
-
   setViewState(zoom: number, panX: number, panY: number): void {
     this.viewState = { zoom, panX, panY };
     this.updateCamera();
@@ -156,7 +141,6 @@ export class WebGLRenderer implements Renderer {
     if (!this.camera || !this.container) return;
     
     const aspect = this.container.clientWidth / this.container.clientHeight;
-    // frustumSize based on height for 1:1 mapping at zoom=1
     const frustumSize = this.container.clientHeight / this.viewState.zoom;
     
     this.camera.left = -frustumSize * aspect / 2 + this.viewState.panX;
@@ -184,694 +168,154 @@ export class WebGLRenderer implements Renderer {
     return screenToWorldUtil(x, y, this.viewState, width, height);
   }
 
-  // Artistic strokes
-  addStroke(stroke: Stroke): void {
-    if (stroke.strokeType === 'digital') return;
-    
-    const points = stroke.displayPoints ?? stroke.smoothedPoints ?? stroke.points;
-    if (points.length < 2) return;
-    
-    this.removeStroke(stroke.id);
-    
-    if (this.useInstancing && points.length <= 100) {
-      this.addStrokeToBatch(stroke, points);
-    } else {
-      const mesh = this.createStrokeMesh(
-        points,
-        stroke.color,
-        stroke.thickness,
-        stroke.brushSettings?.opacity ?? 1
-      );
-      
-      if (mesh && this.scene) {
-        mesh.userData = { strokeId: stroke.id, useInstancing: false };
-        this.strokeMeshes.set(stroke.id, [mesh]);
-        this.scene.add(mesh);
-      }
+  // ============================================================================
+  // Renderer Base Class Implementation
+  // ============================================================================
+
+  protected beginFrame(): void {
+    // Clear all objects before drawing new frame
+    this.clearAllObjects();
+  }
+
+  protected endFrame(): void {
+    // Nothing special needed - Three.js handles frame end
+  }
+
+  public render(): void {
+    if (this.renderer && this.scene && this.camera) {
+      this.renderer.render(this.scene, this.camera);
     }
   }
 
-  private addStrokeToBatch(stroke: Stroke, points: Point[]): void {
+  /**
+   * Execute a batch of render commands
+   */
+  executeCommands(commands: RenderCommand[]): void {
+    this.beginFrame();
+    
+    // Sort by zIndex
+    const sortedCommands = [...commands].sort((a, b) => a.zIndex - b.zIndex);
+    
+    for (const command of sortedCommands) {
+      this.executeCommand(command);
+    }
+    
+    this.endFrame();
+    this.render();
+  }
+
+  // ============================================================================
+  // Low-level Drawing Primitives
+  // ============================================================================
+
+  protected drawStroke(geometry: Geometry, style: RenderStyle): void {
     if (!this.scene) return;
-    
-    const batchKey = `${stroke.color}-${stroke.thickness}`;
-    let batch = this.strokeBatches.get(batchKey);
-    
-    if (!batch) {
-      batch = this.createStrokeBatch(stroke.color, stroke.thickness);
-      this.strokeBatches.set(batchKey, batch);
+
+    let object: THREE.Object3D | null = null;
+
+    switch (geometry.type) {
+      case 'line':
+        object = this.createLineObject(geometry.points, style, VISUAL.Z_STROKES);
+        break;
+      case 'circle':
+        object = this.createCircleObject(geometry.center, geometry.radius, style, VISUAL.Z_STROKES);
+        break;
+      case 'arc':
+        object = this.createArcObject(
+          geometry.center, geometry.radius, 
+          geometry.startAngle, geometry.endAngle, 
+          style, VISUAL.Z_STROKES
+        );
+        break;
+      case 'bezier':
+        object = this.createBezierObject(geometry.points, style, VISUAL.Z_STROKES);
+        break;
     }
-    
-    const matrices: THREE.Matrix4[] = [];
-    
-    for (let i = 0; i < points.length - 1; i++) {
-      const p1 = points[i];
-      const p2 = points[i + 1];
-      
-      const dx = p2.x - p1.x;
-      const dy = p2.y - p1.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      
-      if (dist < 0.001) continue;
-      
-      const matrix = new THREE.Matrix4();
-      const midX = (p1.x + p2.x) / 2;
-      const midY = (p1.y + p2.y) / 2;
-      const angle = Math.atan2(dy, dx);
-      
-      const position = new THREE.Vector3(midX, midY, 0.1);
-      const rotation = new THREE.Euler(0, 0, angle);
-      const scale = new THREE.Vector3(dist, stroke.thickness, 1);
-      
-      matrix.compose(position, new THREE.Quaternion().setFromEuler(rotation), scale);
-      matrices.push(matrix);
-    }
-    
-    if (matrices.length > 0) {
-      batch.strokeIds.push(stroke.id);
-      batch.matrices.set(stroke.id, matrices);
-      this.updateBatchInstances(batch);
+
+    if (object) {
+      object.userData = { type: 'stroke' };
+      this.scene.add(object);
+      this.strokeObjects.push(object);
     }
   }
 
-  private createStrokeBatch(color: string, thickness: number): StrokeBatch {
-    const geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 8);
-    geometry.rotateZ(Math.PI / 2);
-    
-    const material = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(color),
-      side: THREE.DoubleSide
-    });
-    
-    const instancedMesh = new THREE.InstancedMesh(geometry, material, this.maxInstancesPerBatch);
-    instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    
-    if (this.scene) {
-      this.scene.add(instancedMesh);
-    }
-    
-    return {
-      color,
-      thickness,
-      instancedMesh,
-      strokeIds: [],
-      matrices: new Map()
-    };
-  }
-
-  private updateBatchInstances(batch: StrokeBatch): void {
-    const { instancedMesh, matrices } = batch;
-    
-    let instanceIndex = 0;
-    
-    for (const [, strokeMatrices] of matrices) {
-      for (const matrix of strokeMatrices) {
-        if (instanceIndex >= this.maxInstancesPerBatch) break;
-        instancedMesh.setMatrixAt(instanceIndex, matrix);
-        instanceIndex++;
-      }
-    }
-    
-    instancedMesh.count = instanceIndex;
-    instancedMesh.instanceMatrix.needsUpdate = true;
-  }
-
-  private createStrokeMesh(points: Point[], color: string, thickness: number, opacity: number): THREE.Mesh | null {
-    if (points.length < 2 || !this.scene) return null;
-    
-    const vectors = points.map(p => new THREE.Vector3(p.x, p.y, 0.1));
-    const curve = new THREE.CatmullRomCurve3(vectors);
-    curve.curveType = 'catmullrom';
-    curve.tension = 0.5;
-    
-    const geometry = new THREE.TubeGeometry(curve, points.length * 2, thickness / 2, 8, false);
-    const material = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(color),
-      transparent: opacity < 1,
-      opacity: opacity,
-      side: THREE.DoubleSide
-    });
-    
-    return new THREE.Mesh(geometry, material);
-  }
-
-  removeStroke(strokeId: string): void {
-    // Remove from individual meshes
-    const meshes = this.strokeMeshes.get(strokeId);
-    if (meshes && this.scene) {
-      meshes.forEach(mesh => {
-        this.scene!.remove(mesh);
-        mesh.geometry.dispose();
-        (mesh.material as THREE.Material).dispose();
-      });
-      this.strokeMeshes.delete(strokeId);
-      return;
-    }
-    
-    // Remove from batches
-    for (const [, batch] of this.strokeBatches) {
-      if (batch.strokeIds.includes(strokeId)) {
-        batch.strokeIds = batch.strokeIds.filter(id => id !== strokeId);
-        batch.matrices.delete(strokeId);
-        this.updateBatchInstances(batch);
-        
-        if (batch.strokeIds.length === 0 && this.scene) {
-          this.scene.remove(batch.instancedMesh);
-          batch.instancedMesh.geometry.dispose();
-          (batch.instancedMesh.material as THREE.Material).dispose();
-          this.strokeBatches.delete(`${batch.color}-${batch.thickness}`);
-        }
-        return;
-      }
-    }
-  }
-
-  clearStrokes(): void {
+  protected drawPreview(geometry: Geometry, style: RenderStyle): void {
     if (!this.scene) return;
-    
-    // Clear individual meshes
-    this.strokeMeshes.forEach((meshes) => {
-      meshes.forEach(mesh => {
-        this.scene!.remove(mesh);
-        mesh.geometry.dispose();
-        (mesh.material as THREE.Material).dispose();
-      });
-    });
-    this.strokeMeshes.clear();
-    this.renderedArtisticIds.clear();
-    
-    // Clear batches
-    for (const [, batch] of this.strokeBatches) {
-      this.scene.remove(batch.instancedMesh);
-      batch.instancedMesh.geometry.dispose();
-      (batch.instancedMesh.material as THREE.Material).dispose();
+
+    let object: THREE.Object3D | null = null;
+
+    switch (geometry.type) {
+      case 'line':
+        object = this.createDashedLineObject(geometry.points, style, VISUAL.Z_PREVIEWS);
+        break;
+      case 'circle':
+        object = this.createDashedCircleObject(geometry.center, geometry.radius, style, VISUAL.Z_PREVIEWS);
+        break;
+      case 'arc':
+        object = this.createDashedArcObject(
+          geometry.center, geometry.radius,
+          geometry.startAngle, geometry.endAngle,
+          style, VISUAL.Z_PREVIEWS
+        );
+        break;
+      case 'bezier':
+        object = this.createDashedBezierObject(geometry.points, style, VISUAL.Z_PREVIEWS);
+        break;
     }
-    this.strokeBatches.clear();
-    
-    // Clear digital
-    const digitalObjects: THREE.Object3D[] = [];
-    this.scene.traverse((obj) => {
-      if (obj.userData?.type === 'digital') {
-        digitalObjects.push(obj);
-      }
-    });
-    digitalObjects.forEach(obj => {
-      this.scene!.remove(obj);
-    });
-    this.renderedDigitalIds.clear();
-    
-    // Clear current stroke
-    if (this.currentStrokeObject) {
-      this.scene.remove(this.currentStrokeObject);
-      this.currentStrokeObject = null;
+
+    if (object) {
+      object.userData = { type: 'preview' };
+      this.scene.add(object);
+      this.previewObjects.push(object);
     }
   }
 
-  updateCurrentStroke(points: Point[], color: string, _thickness: number, opacity: number): void {
+  protected drawHighlight(geometry: Geometry, style: RenderStyle): void {
     if (!this.scene) return;
-    
-    if (points.length < 2) {
-      if (this.currentStrokeObject) {
-        this.scene.remove(this.currentStrokeObject);
-        this.currentStrokeObject = null;
-      }
-      return;
+
+    let object: THREE.Object3D | null = null;
+
+    switch (geometry.type) {
+      case 'line':
+        object = this.createLineObject(geometry.points, style, VISUAL.Z_HIGHLIGHTS);
+        break;
+      case 'circle':
+        object = this.createCircleObject(geometry.center, geometry.radius, style, VISUAL.Z_HIGHLIGHTS);
+        break;
+      case 'arc':
+        object = this.createArcObject(
+          geometry.center, geometry.radius,
+          geometry.startAngle, geometry.endAngle,
+          style, VISUAL.Z_HIGHLIGHTS
+        );
+        break;
+      case 'bezier':
+        object = this.createBezierObject(geometry.points, style, VISUAL.Z_HIGHLIGHTS);
+        break;
     }
-    
-    // Create simple line geometry for performance
-    const positions = new Float32Array(points.length * 3);
-    for (let i = 0; i < points.length; i++) {
-      positions[i * 3] = points[i].x;
-      positions[i * 3 + 1] = points[i].y;
-      positions[i * 3 + 2] = 0.05;
-    }
-    
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    
-    if (this.currentStrokeObject) {
-      (this.currentStrokeObject as THREE.Line).geometry.dispose();
-      (this.currentStrokeObject as THREE.Line).geometry = geometry;
-    } else {
-      const material = new THREE.LineBasicMaterial({
-        color: new THREE.Color(color),
-        transparent: opacity < 1,
-        opacity: opacity
-      });
-      
-      this.currentStrokeObject = new THREE.Line(geometry, material);
-      this.scene.add(this.currentStrokeObject);
+
+    if (object) {
+      object.userData = { type: 'highlight' };
+      this.scene.add(object);
+      this.highlightObjects.push(object);
     }
   }
 
-  finalizeCurrentStroke(_strokeId: string): void {
-    this.currentStrokeObject = null;
-  }
-
-  // Digital elements
-  addDigitalStroke(stroke: Stroke): void {
-    if (!this.scene || stroke.strokeType !== 'digital') return;
-    
-    this.removeDigitalStroke(stroke.id);
-    
-    const objects: THREE.Object3D[] = [];
-    const segments = stroke.digitalSegments;
-    if (segments && segments.length > 0) {
-      segments.forEach(segment => {
-        let object: THREE.Object3D | null = null;
-        
-        switch (segment.type) {
-          case 'line':
-            object = this.createDigitalLine(segment.points, segment.color, stroke.thickness);
-            break;
-          case 'arc':
-            if (segment.arcData) {
-              object = this.createDigitalArc(segment.arcData, segment.color, stroke.thickness);
-            }
-            break;
-          case 'bezier':
-            object = this.createDigitalBezier(segment.points, segment.color, stroke.thickness);
-            break;
-        }
-        
-        if (object && this.scene) {
-          object.userData = { strokeId: stroke.id, type: 'digital' };
-          this.scene.add(object);
-          objects.push(object);
-        }
-      });
-    }
-    
-    // Store objects for O(1) removal
-    this.digitalStrokeMeshes.set(stroke.id, objects);
-  }
-
-  private createDigitalLine(points: Point[], color: string, thickness: number): THREE.Object3D | null {
-    if (points.length < 2) return null;
-    
-    const geometry = new THREE.BufferGeometry().setFromPoints(
-      points.map(p => new THREE.Vector3(p.x, p.y, 0.1))
-    );
-    
-    const material = new THREE.LineBasicMaterial({
-      color: new THREE.Color(color),
-      linewidth: thickness
-    });
-    
-    return new THREE.Line(geometry, material);
-  }
-
-  private createDigitalArc(arcData: {
-    center: Point;
-    radius: number;
-    startAngle: number;
-    endAngle: number;
-  }, color: string, thickness: number): THREE.Object3D | null {
-    const { center, radius, startAngle, endAngle } = arcData;
-    
-    const curve = new THREE.EllipseCurve(
-      center.x, center.y,
-      radius, radius,
-      startAngle, endAngle,
-      false,
-      0
-    );
-    
-    const points = curve.getPoints(32).map(p => new THREE.Vector3(p.x, p.y, 0.1));
-    const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    
-    const material = new THREE.LineBasicMaterial({
-      color: new THREE.Color(color),
-      linewidth: thickness
-    });
-    
-    return new THREE.Line(geometry, material);
-  }
-
-  private createDigitalBezier(points: Point[], color: string, thickness: number): THREE.Object3D | null {
-    if (points.length < 4) return null;
-    
-    const curve = new THREE.CubicBezierCurve3(
-      new THREE.Vector3(points[0].x, points[0].y, 0.1),
-      new THREE.Vector3(points[1].x, points[1].y, 0.1),
-      new THREE.Vector3(points[2].x, points[2].y, 0.1),
-      new THREE.Vector3(points[3].x, points[3].y, 0.1)
-    );
-    
-    const curvePoints = curve.getPoints(32);
-    const geometry = new THREE.BufferGeometry().setFromPoints(curvePoints);
-    
-    const material = new THREE.LineBasicMaterial({
-      color: new THREE.Color(color),
-      linewidth: thickness
-    });
-    
-    return new THREE.Line(geometry, material);
-  }
-
-  removeDigitalStroke(strokeId: string): void {
+  protected drawIndicator(point: Point, style: RenderStyle): void {
     if (!this.scene) return;
-    
-    // O(1) lookup using Map
-    const objects = this.digitalStrokeMeshes.get(strokeId);
-    if (!objects) return;
-    
-    objects.forEach(obj => {
-      this.scene!.remove(obj);
-      // Dispose geometry and material
-      if (obj instanceof THREE.Line) {
-        obj.geometry.dispose();
-        if (Array.isArray(obj.material)) {
-          obj.material.forEach(m => m.dispose());
-        } else {
-          obj.material.dispose();
-        }
-      }
-    });
-    
-    this.digitalStrokeMeshes.delete(strokeId);
-  }
 
-  clearDigitalElements(): void {
-    if (!this.scene) return;
-    
-    // Remove all tracked digital strokes
-    this.digitalStrokeMeshes.forEach((objects) => {
-      objects.forEach(obj => {
-        this.scene!.remove(obj);
-        // Dispose geometry and material
-        if (obj instanceof THREE.Line) {
-          obj.geometry.dispose();
-          if (Array.isArray(obj.material)) {
-            obj.material.forEach(m => m.dispose());
-          } else {
-            obj.material.dispose();
-          }
-        }
-      });
-    });
-    
-    this.digitalStrokeMeshes.clear();
-  }
+    const size = style.size || VISUAL_THEME.ENDPOINT_SIZE;
 
-  // Digital previews - using dashed lines like Canvas2D
-  updateDigitalLinePreview(start: Point, end: Point, color: string, thickness: number): void {
-    this.clearPreviewByType('line');
-    
-    if (!this.scene) return;
-    
-    // Create dashed line using LineDashedMaterial
-    const geometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(start.x, start.y, VISUAL.Z_PREVIEWS),
-      new THREE.Vector3(end.x, end.y, VISUAL.Z_PREVIEWS)
-    ]);
-    
-    const material = new THREE.LineDashedMaterial({
-      color: new THREE.Color(color),
-      linewidth: thickness,
-      scale: 1,
-      dashSize: VISUAL.DASH_PATTERN[0],
-      gapSize: VISUAL.DASH_PATTERN[1],
-      opacity: VISUAL.PREVIEW_OPACITY,
-      transparent: true,
-    });
-    
-    const line = new THREE.Line(geometry, material);
-    line.computeLineDistances();
-    line.userData = { isPreview: true, previewId: 'linePreview' };
-    this.scene.add(line);
-  }
-
-  updateDigitalPolylinePreview(points: Point[], previewEnd: Point | null, color: string, thickness: number): void {
-    this.clearPreviewByType('polyline');
-    
-    if (!this.scene || points.length < 1) return;
-    
-    // Draw completed segments with solid line
-    for (let i = 0; i < points.length - 1; i++) {
-      const geometry = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(points[i].x, points[i].y, VISUAL.Z_PREVIEWS),
-        new THREE.Vector3(points[i + 1].x, points[i + 1].y, VISUAL.Z_PREVIEWS)
-      ]);
-      
-      const material = new THREE.LineBasicMaterial({ color: new THREE.Color(color) });
-      const segment = new THREE.Line(geometry, material);
-      segment.userData = { isPreview: true, previewId: `polyline-segment-${i}` };
-      this.scene.add(segment);
-    }
-    
-    // Draw preview line with dashed style
-    if (previewEnd && points.length > 0) {
-      const last = points[points.length - 1];
-      const geometry = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(last.x, last.y, VISUAL.Z_PREVIEWS),
-        new THREE.Vector3(previewEnd.x, previewEnd.y, VISUAL.Z_PREVIEWS)
-      ]);
-      
-      const material = new THREE.LineDashedMaterial({
-        color: new THREE.Color(color),
-        linewidth: thickness,
-        scale: 1,
-        dashSize: VISUAL.DASH_PATTERN[0],
-        gapSize: VISUAL.DASH_PATTERN[1],
-        opacity: VISUAL.PREVIEW_OPACITY,
-        transparent: true,
-      });
-      
-      const preview = new THREE.Line(geometry, material);
-      preview.computeLineDistances();
-      preview.userData = { isPreview: true, previewId: 'polyline-preview' };
-      this.scene.add(preview);
-    }
-  }
-
-  updateDigitalCirclePreview(center: Point, radius: number, color: string, thickness: number): void {
-    if (!this.scene) return;
-    
-    this.clearPreviewByType('circle');
-    
-    const curve = new THREE.EllipseCurve(
-      center.x, center.y,
-      radius, radius,
-      0, 2 * Math.PI,
-      false,
-      0
-    );
-    
-    const points = curve.getPoints(64);
-    const geometry = new THREE.BufferGeometry().setFromPoints(
-      points.map(p => new THREE.Vector3(p.x, p.y, VISUAL.Z_PREVIEWS))
-    );
-    
-    // Use dashed material for preview
-    const material = new THREE.LineDashedMaterial({
-      color: new THREE.Color(color),
-      linewidth: thickness,
-      scale: 1,
-      dashSize: VISUAL.DASH_PATTERN[0],
-      gapSize: VISUAL.DASH_PATTERN[1],
-      opacity: VISUAL.PREVIEW_OPACITY,
-      transparent: true,
-    });
-    
-    const circle = new THREE.LineLoop(geometry, material);
-    circle.computeLineDistances();
-    circle.userData = { isPreview: true, previewId: 'circlePreview' };
-    this.scene.add(circle);
-  }
-
-  updateDigitalArcPreview(center: Point, radius: number, startAngle: number, endAngle: number, color: string, thickness: number): void {
-    this.clearPreviewByType('arc');
-    
-    if (!this.scene) return;
-    
-    const curve = new THREE.EllipseCurve(
-      center.x, center.y,
-      radius, radius,
-      startAngle, endAngle,
-      false,
-      0
-    );
-    
-    const points = curve.getPoints(32);
-    const geometry = new THREE.BufferGeometry().setFromPoints(
-      points.map(p => new THREE.Vector3(p.x, p.y, VISUAL.Z_PREVIEWS))
-    );
-    
-    // Use dashed material for preview
-    const material = new THREE.LineDashedMaterial({
-      color: new THREE.Color(color),
-      linewidth: thickness,
-      scale: 1,
-      dashSize: VISUAL.DASH_PATTERN[0],
-      gapSize: VISUAL.DASH_PATTERN[1],
-      opacity: VISUAL.PREVIEW_OPACITY,
-      transparent: true,
-    });
-    
-    const arc = new THREE.Line(geometry, material);
-    arc.computeLineDistances();
-    arc.userData = { isPreview: true, previewId: 'arcPreview' };
-    this.scene.add(arc);
-  }
-
-  updateDigitalBezierPreview(points: Point[], color: string, thickness: number): void {
-    if (!this.scene || points.length < 4) return;
-    
-    this.clearPreviewByType('bezier');
-    
-    const curve = new THREE.CubicBezierCurve3(
-      new THREE.Vector3(points[0].x, points[0].y, VISUAL.Z_PREVIEWS),
-      new THREE.Vector3(points[1].x, points[1].y, VISUAL.Z_PREVIEWS),
-      new THREE.Vector3(points[2].x, points[2].y, VISUAL.Z_PREVIEWS),
-      new THREE.Vector3(points[3].x, points[3].y, VISUAL.Z_PREVIEWS)
-    );
-    
-    const curvePoints = curve.getPoints(32);
-    const geometry = new THREE.BufferGeometry().setFromPoints(curvePoints);
-    
-    // Use dashed material for preview
-    const material = new THREE.LineDashedMaterial({
-      color: new THREE.Color(color),
-      linewidth: thickness,
-      scale: 1,
-      dashSize: VISUAL.DASH_PATTERN[0],
-      gapSize: VISUAL.DASH_PATTERN[1],
-      opacity: VISUAL.PREVIEW_OPACITY,
-      transparent: true,
-    });
-    
-    const bezier = new THREE.Line(geometry, material);
-    bezier.computeLineDistances();
-    bezier.userData = { isPreview: true, previewId: 'bezierPreview' };
-    this.scene.add(bezier);
-  }
-
-  clearDigitalPreviews(): void {
-    if (!this.scene) return;
-    
-    const previewsToRemove = this.scene.children.filter(
-      child => child.userData?.isPreview === true
-    );
-    
-    previewsToRemove.forEach(obj => {
-      this.scene!.remove(obj);
-    });
-  }
-
-  private clearPreviewByType(type: string): void {
-    if (!this.scene) return;
-    
-    const previewsToRemove = this.scene.children.filter(
-      child => child.userData?.isPreview === true && 
-               child.userData?.previewId?.startsWith(type)
-    );
-    
-    previewsToRemove.forEach(obj => {
-      this.scene!.remove(obj);
-    });
-  }
-
-  // Selection/highlight rendering for digital elements
-  highlightDigitalLine(points: Point[], color: string, thickness: number, isHovered: boolean, isSelected: boolean): void {
-    if (!this.scene || points.length < 2) return;
-    
-    const geometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(points[0].x, points[0].y, VISUAL.Z_HIGHLIGHTS),
-      new THREE.Vector3(points[1].x, points[1].y, VISUAL.Z_HIGHLIGHTS)
-    ]);
-    
-    // Use highlight colors like Canvas2D
-    const highlightColor = isSelected ? VISUAL.SELECT_COLOR : isHovered ? VISUAL.HOVER_COLOR : color;
-    const highlightWidth = thickness + (isSelected ? VISUAL.SELECT_WIDTH_ADD : isHovered ? VISUAL.HOVER_WIDTH_ADD : 0);
-    
-    const material = new THREE.LineBasicMaterial({
-      color: new THREE.Color(highlightColor),
-      linewidth: highlightWidth
-    });
-    
-    const line = new THREE.Line(geometry, material);
-    line.userData = { isHighlight: true };
-    this.scene.add(line);
-    this.highlightObjects.push(line);
-  }
-
-  highlightDigitalArc(
-    arcData: { center: Point; radius: number; startAngle: number; endAngle: number },
-    color: string,
-    thickness: number,
-    isHovered: boolean,
-    isSelected: boolean
-  ): void {
-    if (!this.scene) return;
-    
-    const curve = new THREE.EllipseCurve(
-      arcData.center.x, arcData.center.y,
-      arcData.radius, arcData.radius,
-      arcData.startAngle, arcData.endAngle,
-      false,
-      0
-    );
-    
-    const points = curve.getPoints(32).map(p => new THREE.Vector3(p.x, p.y, VISUAL.Z_HIGHLIGHTS));
-    const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    
-    // Use highlight colors like Canvas2D
-    const highlightColor = isSelected ? VISUAL.SELECT_COLOR : isHovered ? VISUAL.HOVER_COLOR : color;
-    const highlightWidth = thickness + (isSelected ? VISUAL.SELECT_WIDTH_ADD : isHovered ? VISUAL.HOVER_WIDTH_ADD : 0);
-    
-    const material = new THREE.LineBasicMaterial({
-      color: new THREE.Color(highlightColor),
-      linewidth: highlightWidth
-    });
-    
-    const arc = new THREE.Line(geometry, material);
-    arc.userData = { isHighlight: true };
-    this.scene.add(arc);
-    this.highlightObjects.push(arc);
-  }
-
-  highlightDigitalBezier(points: Point[], color: string, thickness: number, isHovered: boolean, isSelected: boolean): void {
-    if (!this.scene || points.length < 4) return;
-    
-    const curve = new THREE.CubicBezierCurve3(
-      new THREE.Vector3(points[0].x, points[0].y, VISUAL.Z_HIGHLIGHTS),
-      new THREE.Vector3(points[1].x, points[1].y, VISUAL.Z_HIGHLIGHTS),
-      new THREE.Vector3(points[2].x, points[2].y, VISUAL.Z_HIGHLIGHTS),
-      new THREE.Vector3(points[3].x, points[3].y, VISUAL.Z_HIGHLIGHTS)
-    );
-    
-    const curvePoints = curve.getPoints(32);
-    const geometry = new THREE.BufferGeometry().setFromPoints(curvePoints);
-    
-    // Use highlight colors like Canvas2D
-    const highlightColor = isSelected ? VISUAL.SELECT_COLOR : isHovered ? VISUAL.HOVER_COLOR : color;
-    const highlightWidth = thickness + (isSelected ? VISUAL.SELECT_WIDTH_ADD : isHovered ? VISUAL.HOVER_WIDTH_ADD : 0);
-    
-    const material = new THREE.LineBasicMaterial({
-      color: new THREE.Color(highlightColor),
-      linewidth: highlightWidth
-    });
-    
-    const bezier = new THREE.Line(geometry, material);
-    bezier.userData = { isHighlight: true };
-    this.scene.add(bezier);
-    this.highlightObjects.push(bezier);
-  }
-
-  drawEndpointIndicator(point: Point, color: string, size: number): void {
-    if (!this.scene) return;
-    
     // Create a small circle mesh for the endpoint
     const geometry = new THREE.CircleGeometry(size, 16);
     const material = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(color),
+      color: new THREE.Color(style.color),
       side: THREE.DoubleSide
     });
     
     const circle = new THREE.Mesh(geometry, material);
-    circle.position.set(point.x, point.y, 0.2);
-    circle.userData = { isIndicator: true };
+    circle.position.set(point.x, point.y, VISUAL.Z_INDICATORS);
+    circle.userData = { type: 'indicator' };
     this.scene.add(circle);
     this.indicatorObjects.push(circle);
     
@@ -882,96 +326,428 @@ export class WebGLRenderer implements Renderer {
       side: THREE.DoubleSide
     });
     const border = new THREE.Mesh(borderGeometry, borderMaterial);
-    border.position.set(point.x, point.y, 0.21);
-    border.userData = { isIndicator: true };
+    border.position.set(point.x, point.y, VISUAL.Z_INDICATORS + 0.001);
+    border.userData = { type: 'indicator' };
     this.scene.add(border);
     this.indicatorObjects.push(border);
   }
 
-  drawControlPointIndicator(point: Point, color: string, size: number): void {
-    if (!this.scene) return;
+  protected drawClosedArea(geometry: Extract<Geometry, { type: 'polygon' }>, style: RenderStyle): void {
+    if (!this.scene || geometry.points.length < 3) return;
+
+    // Create a filled polygon using ShapeGeometry
+    const shape = new THREE.Shape();
+    shape.moveTo(geometry.points[0].x, geometry.points[0].y);
     
-    // Create a square for control point
-    const geometry = new THREE.PlaneGeometry(size, size);
+    for (let i = 1; i < geometry.points.length; i++) {
+      shape.lineTo(geometry.points[i].x, geometry.points[i].y);
+    }
+    shape.closePath();
+
+    const shapeGeometry = new THREE.ShapeGeometry(shape);
     const material = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(color),
+      color: new THREE.Color(style.color),
+      transparent: true,
+      opacity: style.opacity,
       side: THREE.DoubleSide
     });
     
-    const square = new THREE.Mesh(geometry, material);
-    square.position.set(point.x, point.y, 0.2);
-    square.userData = { isIndicator: true };
-    this.scene.add(square);
-    this.indicatorObjects.push(square);
+    const mesh = new THREE.Mesh(shapeGeometry, material);
+    mesh.position.z = -5; // Below strokes
+    mesh.userData = { type: 'closedArea' };
+    this.scene.add(mesh);
+    this.closedAreaObjects.push(mesh);
   }
 
-  drawCrossIndicator(point: Point, color: string, size: number): void {
+  /**
+   * Draw text label using Sprite + CanvasTexture
+   */
+  protected drawLabel(label: { text: string; position: Point; style: RenderStyle }): void {
     if (!this.scene) return;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Set canvas size
+    const fontSize = (label.style.lineWidth || 1) * 12;
+    ctx.font = `${fontSize}px sans-serif`;
+    const metrics = ctx.measureText(label.text);
+    const padding = 4;
+    canvas.width = Math.ceil(metrics.width) + padding * 2;
+    canvas.height = Math.ceil(fontSize * 1.5) + padding * 2;
+
+    // Clear and draw text
+    ctx.font = `${fontSize}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = label.style.color || '#000000';
+    ctx.fillText(label.text, canvas.width / 2, canvas.height / 2);
+
+    // Create texture and sprite
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.SpriteMaterial({ map: texture });
+    const sprite = new THREE.Sprite(material);
     
-    // Create cross lines
+    // Position and scale
+    sprite.position.set(label.position.x, label.position.y, VISUAL.Z_INDICATORS + 0.01);
+    sprite.scale.set(canvas.width * 0.15, canvas.height * 0.15, 1);
+
+    this.scene.add(sprite);
+    this.labelObjects.push(sprite);
+  }
+
+  /**
+   * Draw grid
+   */
+  drawGrid(zoom: number, panX: number, panY: number): void {
+    if (!this.scene || !this.container) return;
+
+    // Remove old grid
+    if (this.gridObject) {
+      this.scene.remove(this.gridObject);
+      this.gridObject = null;
+    }
+
+    const width = this.container.clientWidth;
+    const height = this.container.clientHeight;
+    const majorSpacing = 100; // Major grid line spacing in world units
+    const minorSpacing = 20;  // Minor grid line spacing
+
+    const group = new THREE.Group();
+
+    // Calculate visible world bounds
+    const halfWidth = (width / 2) / zoom;
+    const halfHeight = (height / 2) / zoom;
+    const minX = panX - halfWidth;
+    const maxX = panX + halfWidth;
+    const minY = panY - halfHeight;
+    const maxY = panY + halfHeight;
+
+    // Create grid lines
+    const startX = Math.floor(minX / minorSpacing) * minorSpacing;
+    const endX = Math.ceil(maxX / minorSpacing) * minorSpacing;
+    const startY = Math.floor(minY / minorSpacing) * minorSpacing;
+    const endY = Math.ceil(maxY / minorSpacing) * minorSpacing;
+
+    const gridPoints: THREE.Vector3[] = [];
+
+    // Vertical lines
+    for (let x = startX; x <= endX; x += minorSpacing) {
+      const isMajor = Math.abs(x % majorSpacing) < 0.01;
+      const z = isMajor ? VISUAL.Z_GRID + 0.001 : VISUAL.Z_GRID;
+      
+      gridPoints.push(
+        new THREE.Vector3(x, minY, z),
+        new THREE.Vector3(x, maxY, z)
+      );
+    }
+
+    // Horizontal lines
+    for (let y = startY; y <= endY; y += minorSpacing) {
+      const isMajor = Math.abs(y % majorSpacing) < 0.01;
+      const z = isMajor ? VISUAL.Z_GRID + 0.001 : VISUAL.Z_GRID;
+      
+      gridPoints.push(
+        new THREE.Vector3(minX, y, z),
+        new THREE.Vector3(maxX, y, z)
+      );
+    }
+
+    // Create geometry for all lines
+    if (gridPoints.length > 0) {
+      const geometry = new THREE.BufferGeometry().setFromPoints(gridPoints);
+      const material = new THREE.LineBasicMaterial({
+        color: 0xdddddd,
+        transparent: true,
+        opacity: 0.5
+      });
+      const lines = new THREE.LineSegments(geometry, material);
+      group.add(lines);
+    }
+
+    // Draw axes
+    const axisPoints = [
+      new THREE.Vector3(minX, 0, VISUAL.Z_GRID + 0.002),
+      new THREE.Vector3(maxX, 0, VISUAL.Z_GRID + 0.002),
+      new THREE.Vector3(0, minY, VISUAL.Z_GRID + 0.002),
+      new THREE.Vector3(0, maxY, VISUAL.Z_GRID + 0.002)
+    ];
+    const axisGeometry = new THREE.BufferGeometry().setFromPoints(axisPoints);
+    const axisMaterial = new THREE.LineBasicMaterial({ color: 0x888888 });
+    const axes = new THREE.LineSegments(axisGeometry, axisMaterial);
+    group.add(axes);
+
+    this.scene.add(group);
+    this.gridObject = group;
+  }
+
+  // ============================================================================
+  // Geometry Creation Helpers
+  // ============================================================================
+
+  private createLineObject(points: Point[], style: RenderStyle, z: number): THREE.Object3D | null {
+    if (!this.scene || points.length < 2) return null;
+
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(points[0].x, points[0].y, z),
+      new THREE.Vector3(points[1].x, points[1].y, z)
+    ]);
+    
     const material = new THREE.LineBasicMaterial({
-      color: new THREE.Color(color)
+      color: new THREE.Color(style.color),
+      linewidth: style.lineWidth,
+      transparent: style.opacity < 1,
+      opacity: style.opacity
     });
     
-    // Line 1: \
-    const geometry1 = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(point.x - size, point.y - size, 0.2),
-      new THREE.Vector3(point.x + size, point.y + size, 0.2)
-    ]);
-    const line1 = new THREE.Line(geometry1, material);
-    line1.userData = { isIndicator: true };
-    this.scene.add(line1);
-    this.indicatorObjects.push(line1);
-    
-    // Line 2: /
-    const geometry2 = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(point.x + size, point.y - size, 0.2),
-      new THREE.Vector3(point.x - size, point.y + size, 0.2)
-    ]);
-    const line2 = new THREE.Line(geometry2, material);
-    line2.userData = { isIndicator: true };
-    this.scene.add(line2);
-    this.indicatorObjects.push(line2);
-    
-    // Center dot
-    const dotGeometry = new THREE.CircleGeometry(3, 8);
-    const dotMaterial = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(color),
-      side: THREE.DoubleSide
-    });
-    const dot = new THREE.Mesh(dotGeometry, dotMaterial);
-    dot.position.set(point.x, point.y, 0.21);
-    dot.userData = { isIndicator: true };
-    this.scene.add(dot);
-    this.indicatorObjects.push(dot);
+    return new THREE.Line(geometry, material);
   }
 
-  clearHighlights(): void {
+  private createCircleObject(center: Point, radius: number, style: RenderStyle, z: number): THREE.Object3D | null {
+    if (!this.scene) return null;
+
+    const curve = new THREE.EllipseCurve(
+      center.x, center.y,
+      radius, radius,
+      0, 2 * Math.PI,
+      false,
+      0
+    );
+    
+    const points = curve.getPoints(64);
+    const geometry = new THREE.BufferGeometry().setFromPoints(
+      points.map(p => new THREE.Vector3(p.x, p.y, z))
+    );
+    
+    const material = new THREE.LineBasicMaterial({
+      color: new THREE.Color(style.color),
+      linewidth: style.lineWidth,
+      transparent: style.opacity < 1,
+      opacity: style.opacity
+    });
+    
+    return new THREE.LineLoop(geometry, material);
+  }
+
+  private createArcObject(
+    center: Point, radius: number, startAngle: number, endAngle: number,
+    style: RenderStyle, z: number
+  ): THREE.Object3D | null {
+    if (!this.scene) return null;
+
+    const curve = new THREE.EllipseCurve(
+      center.x, center.y,
+      radius, radius,
+      startAngle, endAngle,
+      false,
+      0
+    );
+    
+    const points = curve.getPoints(32);
+    const geometry = new THREE.BufferGeometry().setFromPoints(
+      points.map(p => new THREE.Vector3(p.x, p.y, z))
+    );
+    
+    const material = new THREE.LineBasicMaterial({
+      color: new THREE.Color(style.color),
+      linewidth: style.lineWidth,
+      transparent: style.opacity < 1,
+      opacity: style.opacity
+    });
+    
+    return new THREE.Line(geometry, material);
+  }
+
+  private createBezierObject(points: Point[], style: RenderStyle, z: number): THREE.Object3D | null {
+    if (!this.scene || points.length < 4) return null;
+
+    const curve = new THREE.CubicBezierCurve3(
+      new THREE.Vector3(points[0].x, points[0].y, z),
+      new THREE.Vector3(points[1].x, points[1].y, z),
+      new THREE.Vector3(points[2].x, points[2].y, z),
+      new THREE.Vector3(points[3].x, points[3].y, z)
+    );
+    
+    const curvePoints = curve.getPoints(32);
+    const geometry = new THREE.BufferGeometry().setFromPoints(curvePoints);
+    
+    const material = new THREE.LineBasicMaterial({
+      color: new THREE.Color(style.color),
+      linewidth: style.lineWidth,
+      transparent: style.opacity < 1,
+      opacity: style.opacity
+    });
+    
+    return new THREE.Line(geometry, material);
+  }
+
+  // ============================================================================
+  // Dashed Geometry Creation (for previews)
+  // ============================================================================
+
+  private createDashedLineObject(points: Point[], style: RenderStyle, z: number): THREE.Object3D | null {
+    if (!this.scene || points.length < 2) return null;
+
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(points[0].x, points[0].y, z),
+      new THREE.Vector3(points[1].x, points[1].y, z)
+    ]);
+    
+    const material = new THREE.LineDashedMaterial({
+      color: new THREE.Color(style.color),
+      linewidth: style.lineWidth,
+      scale: 1,
+      dashSize: VISUAL_THEME.DASH_PATTERN[0],
+      gapSize: VISUAL_THEME.DASH_PATTERN[1],
+      opacity: style.opacity,
+      transparent: true,
+    });
+    
+    const line = new THREE.Line(geometry, material);
+    line.computeLineDistances();
+    return line;
+  }
+
+  private createDashedCircleObject(center: Point, radius: number, style: RenderStyle, z: number): THREE.Object3D | null {
+    if (!this.scene) return null;
+
+    const curve = new THREE.EllipseCurve(
+      center.x, center.y,
+      radius, radius,
+      0, 2 * Math.PI,
+      false,
+      0
+    );
+    
+    const points = curve.getPoints(64);
+    const geometry = new THREE.BufferGeometry().setFromPoints(
+      points.map(p => new THREE.Vector3(p.x, p.y, z))
+    );
+    
+    const material = new THREE.LineDashedMaterial({
+      color: new THREE.Color(style.color),
+      linewidth: style.lineWidth,
+      scale: 1,
+      dashSize: VISUAL_THEME.DASH_PATTERN[0],
+      gapSize: VISUAL_THEME.DASH_PATTERN[1],
+      opacity: style.opacity,
+      transparent: true,
+    });
+    
+    const circle = new THREE.LineLoop(geometry, material);
+    circle.computeLineDistances();
+    return circle;
+  }
+
+  private createDashedArcObject(
+    center: Point, radius: number, startAngle: number, endAngle: number,
+    style: RenderStyle, z: number
+  ): THREE.Object3D | null {
+    if (!this.scene) return null;
+
+    const curve = new THREE.EllipseCurve(
+      center.x, center.y,
+      radius, radius,
+      startAngle, endAngle,
+      false,
+      0
+    );
+    
+    const points = curve.getPoints(32);
+    const geometry = new THREE.BufferGeometry().setFromPoints(
+      points.map(p => new THREE.Vector3(p.x, p.y, z))
+    );
+    
+    const material = new THREE.LineDashedMaterial({
+      color: new THREE.Color(style.color),
+      linewidth: style.lineWidth,
+      scale: 1,
+      dashSize: VISUAL_THEME.DASH_PATTERN[0],
+      gapSize: VISUAL_THEME.DASH_PATTERN[1],
+      opacity: style.opacity,
+      transparent: true,
+    });
+    
+    const arc = new THREE.Line(geometry, material);
+    arc.computeLineDistances();
+    return arc;
+  }
+
+  private createDashedBezierObject(points: Point[], style: RenderStyle, z: number): THREE.Object3D | null {
+    if (!this.scene || points.length < 4) return null;
+
+    const curve = new THREE.CubicBezierCurve3(
+      new THREE.Vector3(points[0].x, points[0].y, z),
+      new THREE.Vector3(points[1].x, points[1].y, z),
+      new THREE.Vector3(points[2].x, points[2].y, z),
+      new THREE.Vector3(points[3].x, points[3].y, z)
+    );
+    
+    const curvePoints = curve.getPoints(32);
+    const geometry = new THREE.BufferGeometry().setFromPoints(curvePoints);
+    
+    const material = new THREE.LineDashedMaterial({
+      color: new THREE.Color(style.color),
+      linewidth: style.lineWidth,
+      scale: 1,
+      dashSize: VISUAL_THEME.DASH_PATTERN[0],
+      gapSize: VISUAL_THEME.DASH_PATTERN[1],
+      opacity: style.opacity,
+      transparent: true,
+    });
+    
+    const bezier = new THREE.Line(geometry, material);
+    bezier.computeLineDistances();
+    return bezier;
+  }
+
+  // ============================================================================
+  // Cleanup
+  // ============================================================================
+
+  private clearAllObjects(): void {
+    this.clearObjectList(this.strokeObjects);
+    this.clearObjectList(this.previewObjects);
+    this.clearObjectList(this.highlightObjects);
+    this.clearObjectList(this.indicatorObjects);
+    this.clearObjectList(this.closedAreaObjects);
+    this.clearObjectList(this.labelObjects);
+    if (this.gridObject) {
+      this.scene?.remove(this.gridObject);
+      this.gridObject = null;
+    }
+  }
+
+  private clearObjectList(objects: THREE.Object3D[]): void {
     if (!this.scene) return;
     
-    // Remove all highlight objects
-    this.highlightObjects.forEach(obj => {
+    objects.forEach(obj => {
       this.scene!.remove(obj);
+      // Dispose geometry and material
+      if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
+        obj.geometry.dispose();
+        if (Array.isArray(obj.material)) {
+          obj.material.forEach(m => m.dispose());
+        } else {
+          obj.material.dispose();
+        }
+      }
     });
-    this.highlightObjects = [];
     
-    // Remove all indicator objects
-    this.indicatorObjects.forEach(obj => {
-      this.scene!.remove(obj);
-    });
-    this.indicatorObjects = [];
+    objects.length = 0;
   }
 
-  // Legacy selection indicators (kept for compatibility)
-  drawSelectionIndicator(_point: Point, _color: string, _size: number): void {
-    // Use drawEndpointIndicator instead
-  }
+  // ============================================================================
+  // Legacy API (for backward compatibility during migration)
+  // All methods below are deprecated and will be removed.
+  // Use executeCommands() instead.
+  // ============================================================================
 
-  drawHoverIndicator(_point: Point, _color: string, _size: number): void {
-    // Use drawEndpointIndicator instead
-  }
-
-  clearIndicators(): void {
-    // Use clearHighlights instead
+  /**
+   * @deprecated Use executeCommands instead
+   */
+  invalidate(): void {
+    // No-op for WebGL - it renders immediately
   }
 }

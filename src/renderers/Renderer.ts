@@ -5,9 +5,15 @@
  * - DrawingCanvas depends on this interface, not concrete implementations
  * - Concrete renderers (Canvas2D, WebGL) implement these methods
  * - No renderer type checking in DrawingCanvas
+ * 
+ * Architecture (2026-03-29):
+ * - executeCommands() is the primary rendering entry point for new architecture
+ * - Legacy methods (addStroke, updateDigitalLinePreview, etc.) are for backward compatibility
+ * - New code should use executeCommands() with RenderCommand[]
  */
 
 import type { Point, Stroke } from '../types';
+import type { RenderCommand } from './commands/RenderCommand';
 
 export interface Renderer {
   // Lifecycle
@@ -18,6 +24,22 @@ export interface Renderer {
   
   // View state
   setViewState(zoom: number, panX: number, panY: number): void;
+  
+  // ============================================================================
+  // New Architecture (2026-03-29) - Command-based rendering
+  // ============================================================================
+  
+  /**
+   * Execute a batch of render commands
+   * This is the primary rendering entry point for the new architecture
+   * @param commands - Array of render commands to execute
+   */
+  executeCommands(commands: RenderCommand[]): void;
+  
+  // ============================================================================
+  // Legacy API - For backward compatibility during migration
+  // These methods will be deprecated once migration is complete
+  // ============================================================================
   
   // Artistic strokes
   addStroke(stroke: Stroke): void;

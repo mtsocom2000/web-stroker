@@ -1,5 +1,6 @@
 import type { Point, Stroke } from '../types';
 import type { Renderer } from './Renderer';
+import type { RenderCommand, RenderStyle } from './commands/RenderCommand';
 import { worldToScreen, screenToWorld, type ViewState } from '../utils/coordinates';
 import { 
   VISUAL_THEME, 
@@ -541,5 +542,275 @@ export class Canvas2DRenderer implements Renderer {
   clearHighlights(): void {
     // Highlights are drawn inline
     this.needsRedraw = true;
+  }
+
+  // ============================================================================
+  // New Architecture - Command-based rendering
+  // ============================================================================
+
+  /**
+   * Execute a batch of render commands
+   * This is the primary rendering entry point for the new architecture
+   */
+  executeCommands(commands: RenderCommand[]): void {
+    if (!this.ctx) return;
+
+    // Clear canvas
+    this.clearCanvas();
+
+    // Sort commands by zIndex for proper layering
+    const sortedCommands = [...commands].sort((a, b) => a.zIndex - b.zIndex);
+
+    // Execute each command
+    for (const command of sortedCommands) {
+      this.executeCommand(command);
+    }
+  }
+
+  /**
+   * Execute a single render command
+   */
+  private executeCommand(command: RenderCommand): void {
+    switch (command.type) {
+      case 'stroke':
+        this.renderStrokeCommand(command);
+        break;
+      case 'preview':
+        this.renderPreviewCommand(command);
+        break;
+      case 'highlight':
+        this.renderHighlightCommand(command);
+        break;
+      case 'indicator':
+        this.renderIndicatorCommand(command);
+        break;
+      case 'label':
+        this.renderLabelCommand(command);
+        break;
+      case 'closedArea':
+        this.renderClosedAreaCommand(command);
+        break;
+    }
+  }
+
+  private renderStrokeCommand(command: RenderCommand): void {
+    switch (command.geometry.type) {
+      case 'line':
+        this.drawPath(command.geometry.points, command.style);
+        break;
+      case 'circle':
+        this.drawCirclePath(command.geometry.center, command.geometry.radius, command.style);
+        break;
+      case 'arc':
+        this.drawArcPath(
+          command.geometry.center,
+          command.geometry.radius,
+          command.geometry.startAngle,
+          command.geometry.endAngle,
+          command.style
+        );
+        break;
+      case 'bezier':
+        this.drawBezierPath(command.geometry.points, command.style);
+        break;
+    }
+  }
+
+  private renderPreviewCommand(command: RenderCommand): void {
+    // Preview uses dashed lines
+    const previewStyle: RenderStyle = {
+      ...command.style,
+      lineStyle: 'dashed',
+    };
+
+    switch (command.geometry.type) {
+      case 'line':
+        this.drawPath(command.geometry.points, previewStyle);
+        break;
+      case 'circle':
+        this.drawCirclePath(command.geometry.center, command.geometry.radius, previewStyle);
+        break;
+      case 'arc':
+        this.drawArcPath(
+          command.geometry.center,
+          command.geometry.radius,
+          command.geometry.startAngle,
+          command.geometry.endAngle,
+          previewStyle
+        );
+        break;
+      case 'bezier':
+        this.drawBezierPath(command.geometry.points, previewStyle);
+        break;
+    }
+  }
+
+  private renderHighlightCommand(command: RenderCommand): void {
+    switch (command.geometry.type) {
+      case 'line':
+        this.drawPath(command.geometry.points, command.style);
+        break;
+      case 'circle':
+        this.drawCirclePath(command.geometry.center, command.geometry.radius, command.style);
+        break;
+      case 'arc':
+        this.drawArcPath(
+          command.geometry.center,
+          command.geometry.radius,
+          command.geometry.startAngle,
+          command.geometry.endAngle,
+          command.style
+        );
+        break;
+      case 'bezier':
+        this.drawBezierPath(command.geometry.points, command.style);
+        break;
+    }
+  }
+
+  private renderIndicatorCommand(command: RenderCommand): void {
+    if (!this.ctx || command.geometry.type !== 'point') return;
+    
+    const point = command.geometry.point;
+    const screen = this.worldToScreen(point);
+    
+    this.ctx.beginPath();
+    this.ctx.arc(screen.x, screen.y, command.style.size || 5, 0, Math.PI * 2);
+    this.ctx.fillStyle = command.style.color;
+    this.ctx.fill();
+    this.ctx.strokeStyle = '#ffffff';
+    this.ctx.lineWidth = 1;
+    this.ctx.stroke();
+  }
+
+  private renderLabelCommand(command: RenderCommand): void {
+    if (!this.ctx || command.geometry.type !== 'point') return;
+    
+    const screen = this.worldToScreen(command.geometry.point);
+    const text = (command as any).text as string;
+    
+    this.ctx.font = `${(command.style.lineWidth || 1) * 12}px sans-serif`;
+    this.ctx.fillStyle = command.style.color;
+    this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'middle';
+    this.ctx.fillText(text, screen.x, screen.y);
+  }
+
+  private renderClosedAreaCommand(command: RenderCommand): void {
+    if (!this.ctx || command.geometry.type !== 'polygon') return;
+    
+    const points = command.geometry.points;
+    if (points.length < 3) return;
+
+    this.ctx.beginPath();
+    const first = this.worldToScreen(points[0]);
+    this.ctx.moveTo(first.x, first.y);
+    
+    for (let i = 1; i < points.length; i++) {
+      const p = this.worldToScreen(points[i]);
+      this.ctx.lineTo(p.x, p.y);
+    }
+    
+    this.ctx.closePath();
+    this.ctx.fillStyle = command.style.color;
+    this.ctx.globalAlpha = command.style.opacity;
+    this.ctx.fill();
+    this.ctx.globalAlpha = 1;
+  }
+
+  /**
+   * Draw a path (polyline) with the given style
+   */
+  private drawPath(points: Point[], style: RenderStyle): void {
+    if (!this.ctx || points.length < 2) return;
+
+    this.ctx.beginPath();
+    const first = this.worldToScreen(points[0]);
+    this.ctx.moveTo(first.x, first.y);
+
+    for (let i = 1; i < points.length; i++) {
+      const p = this.worldToScreen(points[i]);
+      this.ctx.lineTo(p.x, p.y);
+    }
+
+    this.applyStyle(style);
+    this.ctx.stroke();
+  }
+
+  /**
+   * Draw a circle with the given style
+   */
+  private drawCirclePath(center: Point, radius: number, style: RenderStyle): void {
+    if (!this.ctx) return;
+
+    const screen = this.worldToScreen(center);
+    const screenRadius = radius * this.viewState.zoom;
+
+    this.ctx.beginPath();
+    this.ctx.arc(screen.x, screen.y, screenRadius, 0, Math.PI * 2);
+
+    this.applyStyle(style);
+    this.ctx.stroke();
+  }
+
+  /**
+   * Draw an arc with the given style
+   */
+  private drawArcPath(
+    center: Point,
+    radius: number,
+    startAngle: number,
+    endAngle: number,
+    style: RenderStyle
+  ): void {
+    if (!this.ctx) return;
+
+    const screen = this.worldToScreen(center);
+    const screenRadius = radius * this.viewState.zoom;
+
+    this.ctx.beginPath();
+    this.ctx.arc(screen.x, screen.y, screenRadius, -endAngle, -startAngle, false);
+
+    this.applyStyle(style);
+    this.ctx.stroke();
+  }
+
+  /**
+   * Draw a bezier curve with the given style
+   */
+  private drawBezierPath(points: Point[], style: RenderStyle): void {
+    if (!this.ctx || points.length < 4) return;
+
+    const p0 = this.worldToScreen(points[0]);
+    const p1 = this.worldToScreen(points[1]);
+    const p2 = this.worldToScreen(points[2]);
+    const p3 = this.worldToScreen(points[3]);
+
+    this.ctx.beginPath();
+    this.ctx.moveTo(p0.x, p0.y);
+    this.ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
+
+    this.applyStyle(style);
+    this.ctx.stroke();
+  }
+
+  /**
+   * Apply render style to canvas context
+   */
+  private applyStyle(style: RenderStyle): void {
+    if (!this.ctx) return;
+
+    this.ctx.strokeStyle = style.color;
+    this.ctx.lineWidth = style.lineWidth;
+    this.ctx.lineCap = 'round';
+    this.ctx.lineJoin = 'round';
+
+    if (style.lineStyle === 'dashed') {
+      this.ctx.setLineDash(VISUAL_THEME.DASH_PATTERN);
+    } else {
+      this.ctx.setLineDash([]);
+    }
+
+    this.ctx.globalAlpha = style.opacity;
   }
 }
