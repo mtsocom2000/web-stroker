@@ -15,6 +15,7 @@ import { DrawToolPanel } from './components/DrawToolPanel';
 import { Toolbar } from './components/Toolbar';
 import { ThreeViewCanvas } from './components/ThreeViewCanvas';
 import { FeatureTreePanel } from './components/FeatureTreePanel';
+import { ModelingPanel } from './components/ModelingPanel';
 import { useDrawingStore } from './store';
 import { kernel } from './kernel';
 
@@ -113,6 +114,9 @@ function App() {
                         <PropertyPanel />
                     </div>
                 </div>
+
+                {/* 3D 建模面板 (仅在 3D 视图显示) */}
+                {store.renderer === 'threejs' && <ModelingPanel />}
             </div>
         </div>
     );
