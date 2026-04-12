@@ -3,6 +3,8 @@ import type { Stroke, CanvasState, ToolCategory, ArtisticTool, DigitalTool, Meas
 import type { BrushType, BrushSettings } from './brush/presets';
 import type { FillRegion } from './fillRegion';
 import { ConstraintManager } from './constraints/ConstraintManager';
+import type { Shape3DData, Feature, Workplane } from './types3d';
+import { FeatureTree } from './kernel/FeatureTree';
 
 /** Stroke processing mode: original, smooth, or predict */
 export type StrokeMode = 'original' | 'smooth' | 'predict';
@@ -47,7 +49,7 @@ interface DrawingState {
   digitalTool: DigitalTool;
   setDigitalTool: (tool: DigitalTool) => void;
   
-  // Digital Mode (draw vs select for digital elements)
+  // Digital Mode
   digitalMode: DigitalMode;
   setDigitalMode: (mode: DigitalMode) => void;
   
@@ -91,7 +93,7 @@ interface DrawingState {
   hoveredDigitalStrokeId: string | null;
   setHoveredDigitalStrokeId: (id: string | null) => void;
   
-  // Selection (new architecture)
+  // Selection
   selectedElements: SelectableElement[];
   setSelectedElements: (elements: SelectableElement[]) => void;
   activeTool: string;
@@ -121,7 +123,7 @@ interface DrawingState {
   removeStroke: (id: string) => void;
   updateStroke: (id: string, stroke: Stroke, skipHistory?: boolean) => void;
   updateStrokes: (strokes: { id: string; stroke: Stroke }[]) => void;
-  updateStrokePoints: (id: string, points: Point[]) => void; // For animation replay
+  updateStrokePoints: (id: string, points: Point[]) => void;
   clearStrokes: () => void;
 
   // Fill Regions
@@ -147,23 +149,23 @@ interface DrawingState {
   setZoom: (zoom: number) => void;
   setPan: (panX: number, panY: number) => void;
 
-  // Drawing tools (legacy - for backward compatibility)
+  // Drawing tools
   currentColor: string;
   currentThickness: number;
   setColor: (color: string) => void;
   setThickness: (thickness: number) => void;
 
-  // Stroke mode: original, smooth, or predict
+  // Stroke mode
   strokeMode: StrokeMode;
   setStrokeMode: (mode: StrokeMode) => void;
 
-  // Snap (digital mode snapping)
+  // Snap
   snapEnabled: boolean;
   snapThreshold: number;
   setSnapEnabled: (enabled: boolean) => void;
   setSnapThreshold: (threshold: number) => void;
 
-  // New Brush System
+  // Brush System
   currentBrushType: BrushType;
   currentBrushSettings: BrushSettings;
   setBrushType: (type: BrushType) => void;
@@ -178,11 +180,11 @@ interface DrawingState {
   undo: () => void;
   redo: () => void;
 
-  // Animation Replay State
+  // Animation Replay
   isAnimationReplay: boolean;
   setAnimationReplay: (enabled: boolean) => void;
 
-  // Undo Predict - 恢复最后一次绘制的预测
+  // Undo Predict
   lastStrokeOriginalData: { id: string; originalPoints: Point[]; simplifiedPoints?: Point[]; displayPoints?: Point[] } | null;
   setLastStrokeOriginalData: (data: { id: string; originalPoints: Point[]; simplifiedPoints?: Point[]; displayPoints?: Point[] } | null) => void;
   undoLastPredict: () => boolean;
@@ -190,9 +192,27 @@ interface DrawingState {
   // Renderer Configuration
   renderer: 'canvas2d' | 'threejs';
   setRenderer: (renderer: 'canvas2d' | 'threejs') => void;
+
+  // ============================================================================
+  // 3D Shapes (新增)
+  // ============================================================================
+  shapes3D: Shape3DData[];
+  addShape3D: (shape: Shape3DData) => void;
+  removeShape3D: (id: string) => void;
+  updateShape3D: (id: string, updates: Partial<Shape3DData>) => void;
+  getShape3D: (id: string) => Shape3DData | undefined;
+
+  // Workplanes
+  workplanes: Workplane[];
+  addWorkplane: (workplane: Workplane) => void;
+  removeWorkplane: (id: string) => void;
+
+  // Feature Tree
+  featureTree: FeatureTree;
+  setFeatureTree: (tree: FeatureTree) => void;
 }
 
-export const useDrawingStore = create<DrawingState>((set) => {
+export const useDrawingStore = create<DrawingState>((set, get) => {
   const initialCanvasState: CanvasState = {
     strokes: [],
     canvasWidth: 100,
@@ -257,9 +277,7 @@ export const useDrawingStore = create<DrawingState>((set) => {
     setMeasureFirstLine: (line) => set({ measureFirstLine: line }),
     setMeasureSecondLine: (line) => set({ measureSecondLine: line }),
     setMeasureFaceId: (id) => set({ measureFaceId: id }),
-    setSelectMode: (mode) => {
-      set({ selectMode: mode });
-    },
+    setSelectMode: (mode) => set({ selectMode: mode }),
     setLastMeasureValue: (value) => set({ lastMeasureValue: value }),
     clearMeasure: () => set((state) => ({
       measureTool: state.measureTool,
@@ -270,7 +288,14 @@ export const useDrawingStore = create<DrawingState>((set) => {
       measureFaceId: null,
       lastMeasureValue: '--'
     })),
-    clearCurrentMeasurement: () => set({ measureStartPoint: null, measureEndPoint: null, measureFirstLine: null, measureSecondLine: null, measureFaceId: null, lastMeasureValue: '--' }),
+    clearCurrentMeasurement: () => set({ 
+      measureStartPoint: null, 
+      measureEndPoint: null, 
+      measureFirstLine: null, 
+      measureSecondLine: null, 
+      measureFaceId: null, 
+      lastMeasureValue: '--' 
+    }),
     drawingClearCounter: 0,
     incrementClearCounter: () => set((state) => ({ drawingClearCounter: state.drawingClearCounter + 1 })),
     
@@ -278,9 +303,6 @@ export const useDrawingStore = create<DrawingState>((set) => {
     constraintTool: null,
     setConstraintTool: (tool) => set({ constraintTool: tool }),
 
-    // Mode (backward compatibility)
-    mode: 'select',
-    
     // Digital Selection
     selectedDigitalStrokeIds: [],
     setSelectedDigitalStrokeIds: (ids) => set({ selectedDigitalStrokeIds: ids }),
@@ -291,7 +313,7 @@ export const useDrawingStore = create<DrawingState>((set) => {
     hoveredDigitalStrokeId: null,
     setHoveredDigitalStrokeId: (id) => set({ hoveredDigitalStrokeId: id }),
     
-    // Selection (new architecture)
+    // Selection
     selectedElements: [],
     setSelectedElements: (elements) => set({ selectedElements: elements }),
     activeTool: 'select',
@@ -300,379 +322,159 @@ export const useDrawingStore = create<DrawingState>((set) => {
     // Constraints
     constraints: [],
     constraintManager: new ConstraintManager(),
-    addConstraint: (constraint) => set((state) => {
-      state.constraintManager.addConstraint(constraint);
-      return { constraints: state.constraintManager.getConstraints() };
-    }),
-    removeConstraint: (id) => set((state) => {
-      state.constraintManager.removeConstraint(id);
-      return { constraints: state.constraintManager.getConstraints() };
-    }),
-    updateConstraint: (id, value) => set((state) => {
-      state.constraintManager.updateConstraint(id, value);
-      return { constraints: state.constraintManager.getConstraints() };
-    }),
-    getConstraintsForPoint: (strokeId: string, pointIndex: number): Constraint[] => {
-      return useDrawingStore.getState().constraintManager.getConstraintsForTarget(strokeId, pointIndex);
+    addConstraint: (constraint) => set((state) => ({ constraints: [...state.constraints, constraint] })),
+    removeConstraint: (id) => set((state) => ({ 
+      constraints: state.constraints.filter(c => c.id !== id) 
+    })),
+    updateConstraint: (id, value) => set((state) => ({
+      constraints: state.constraints.map(c => c.id === id ? { ...c, value } : c)
+    })),
+    getConstraintsForPoint: (strokeId, pointIndex) => {
+      return get().constraints.filter(c => 
+        c.targets.some(t => t.strokeId === strokeId && t.pointIndex === pointIndex)
+      );
     },
     
-    // Constraint creation state
     isCreatingConstraint: false,
     constraintType: null,
     constraintPendingTargets: [],
     setIsCreatingConstraint: (isCreating) => set({ isCreatingConstraint: isCreating }),
     setConstraintType: (type) => set({ constraintType: type }),
-    addConstraintTarget: (target) => set((state) => ({
-      constraintPendingTargets: [...state.constraintPendingTargets, target]
+    addConstraintTarget: (target) => set((state) => ({ 
+      constraintPendingTargets: [...state.constraintPendingTargets, target] 
     })),
     clearConstraintTargets: () => set({ constraintPendingTargets: [] }),
 
+    // Strokes
     strokes: [],
+    addStroke: (stroke) => set((state) => ({ strokes: [...state.strokes, stroke] })),
+    addStrokesBatch: (strokes) => set((state) => ({ strokes: [...state.strokes, ...strokes] })),
+    removeStroke: (id) => set((state) => ({ strokes: state.strokes.filter(s => s.id !== id) })),
+    updateStroke: (id, stroke) => set((state) => ({
+      strokes: state.strokes.map(s => s.id === id ? stroke : s)
+    })),
+    updateStrokes: (updates) => set((state) => ({
+      strokes: state.strokes.map(s => {
+        const update = updates.find(u => u.id === s.id);
+        return update ? update.stroke : s;
+      })
+    })),
+    updateStrokePoints: (id, points) => set((state) => ({
+      strokes: state.strokes.map(s => s.id === id ? { ...s, points } : s)
+    })),
+    clearStrokes: () => set({ strokes: [] }),
+
+    // Fill Regions
     fillRegions: [],
+    setFillRegions: (regions) => set({ fillRegions: regions }),
     selectedFillRegionId: null,
+    setSelectedFillRegionId: (id) => set({ selectedFillRegionId: id }),
+
+    // Selection
+    selectedStrokeIds: [],
+    setSelectedStrokeIds: (ids) => set({ selectedStrokeIds: ids }),
+    addToSelection: (id) => set((state) => ({ 
+      selectedStrokeIds: [...state.selectedStrokeIds, id] 
+    })),
+    removeFromSelection: (id) => set((state) => ({ 
+      selectedStrokeIds: state.selectedStrokeIds.filter(sid => sid !== id) 
+    })),
+    toggleSelection: (id) => set((state) => ({
+      selectedStrokeIds: state.selectedStrokeIds.includes(id)
+        ? state.selectedStrokeIds.filter(sid => sid !== id)
+        : [...state.selectedStrokeIds, id]
+    })),
+    clearSelection: () => set({ selectedStrokeIds: [] }),
+
+    // Canvas settings
     canvasWidth: 100,
     canvasHeight: 100,
     zoom: 1,
     panX: 0,
     panY: 0,
-    currentColor: '#000000',
-    currentThickness: 2,
-    strokeMode: 'smooth',
-    snapEnabled: true,
-    snapThreshold: 10,
-    selectedStrokeIds: [],
-    history: [initialCanvasState],
-    historyIndex: 0,
-
-    currentBrushType: 'pencil',
-    currentBrushSettings: defaultBrushSettings,
-
-    // Undo Predict state
-    lastStrokeOriginalData: null,
-    setLastStrokeOriginalData: (data) => set({ lastStrokeOriginalData: data }),
-    undoLastPredict: () => {
-      let success = false;
-      set((state) => {
-        if (!state.lastStrokeOriginalData) {
-          return state;
-        }
-        
-        const { id, originalPoints } = state.lastStrokeOriginalData;
-        const strokeIndex = state.strokes.findIndex((s) => s.id === id);
-        
-        if (strokeIndex === -1) {
-          return { ...state, lastStrokeOriginalData: null };
-        }
-        
-        // 恢复到原始绘制数据：使用最原始的 points（有抖动）
-        const stroke = state.strokes[strokeIndex];
-        const updatedStroke: Stroke = {
-          ...stroke,
-          points: originalPoints, // 恢复最原始的绘制点（有抖动）
-          smoothedPoints: originalPoints, // 也恢复为原始点，不要保留规整后的
-          displayPoints: undefined, // 清除预测结果
-          cornerPoints: undefined, // 清除角点数据
-          cornerIndices: undefined,
-          segments: undefined,
-        };
-        
-        const newStrokes = [...state.strokes];
-        newStrokes[strokeIndex] = updatedStroke;
-        
-        // 同时更新 history
-        const newHistory = state.history.slice(0, state.historyIndex + 1);
-        newHistory.push({
-          strokes: newStrokes,
-          canvasWidth: state.canvasWidth,
-          canvasHeight: state.canvasHeight,
-          zoom: state.zoom,
-          panX: state.panX,
-          panY: state.panY,
-        });
-        
-        success = true;
-        return {
-          strokes: newStrokes,
-          history: newHistory,
-          historyIndex: newHistory.length - 1,
-          lastStrokeOriginalData: null, // 清除已恢复的数据
-        };
-      });
-      return success;
-    },
-
-    // Stroke operations
-    addStroke: (stroke) =>
-      set((state) => {
-        const newStrokes = [...state.strokes, stroke];
-        const newHistory = state.history.slice(0, state.historyIndex + 1);
-        newHistory.push({
-          strokes: newStrokes,
-          canvasWidth: state.canvasWidth,
-          canvasHeight: state.canvasHeight,
-          zoom: state.zoom,
-          panX: state.panX,
-          panY: state.panY,
-        });
-        return {
-          strokes: newStrokes,
-          selectedStrokeIds: [],
-          history: newHistory,
-          historyIndex: newHistory.length - 1,
-        };
-      }),
-
-    removeStroke: (id) =>
-      set((state) => {
-        const newStrokes = state.strokes.filter((s) => s.id !== id);
-        const newHistory = state.history.slice(0, state.historyIndex + 1);
-        newHistory.push({
-          strokes: newStrokes,
-          canvasWidth: state.canvasWidth,
-          canvasHeight: state.canvasHeight,
-          zoom: state.zoom,
-          panX: state.panX,
-          panY: state.panY,
-        });
-        return {
-          strokes: newStrokes,
-          selectedStrokeIds: state.selectedStrokeIds.filter((sid) => sid !== id),
-          history: newHistory,
-          historyIndex: newHistory.length - 1,
-        };
-      }),
-
-    updateStroke: (id, stroke, skipHistory: boolean = false) =>
-      set((state) => {
-        const newStrokes = state.strokes.map((s) => (s.id === id ? stroke : s));
-        
-        if (skipHistory) {
-          return {
-            strokes: newStrokes,
-          };
-        }
-        
-        const newHistory = state.history.slice(0, state.historyIndex + 1);
-        newHistory.push({
-          strokes: newStrokes,
-          canvasWidth: state.canvasWidth,
-          canvasHeight: state.canvasHeight,
-          zoom: state.zoom,
-          panX: state.panX,
-          panY: state.panY,
-        });
-        return {
-          strokes: newStrokes,
-          history: newHistory,
-          historyIndex: newHistory.length - 1,
-        };
-      }),
-
-    updateStrokePoints: (id: string, points: Point[]) =>
-      set((state) => {
-        const strokeIndex = state.strokes.findIndex((s) => s.id === id);
-        if (strokeIndex === -1) return state;
-        
-        // Create new strokes array to trigger React re-render
-        const newStrokes = [...state.strokes];
-        newStrokes[strokeIndex] = {
-          ...newStrokes[strokeIndex],
-          points: [...points],
-        };
-        
-        return { strokes: newStrokes };
-      }),
-
-    clearStrokes: () =>
-      set((_state) => {
-        const newHistory = _state.history.slice(0, _state.historyIndex + 1);
-        newHistory.push({
-          strokes: [],
-          canvasWidth: _state.canvasWidth,
-          canvasHeight: _state.canvasHeight,
-          zoom: _state.zoom,
-          panX: _state.panX,
-          panY: _state.panY,
-        });
-        return {
-          strokes: [],
-          selectedStrokeIds: [],
-          fillRegions: [],
-          history: newHistory,
-          historyIndex: newHistory.length - 1,
-        };
-      }),
-
-    // Batch stroke operations
-    addStrokesBatch: (strokes: Stroke[]) =>
-      set((state) => {
-        if (strokes.length === 0) return state;
-        
-        const newStrokes = [...state.strokes, ...strokes];
-        const newHistory = state.history.slice(0, state.historyIndex + 1);
-        newHistory.push({
-          strokes: newStrokes,
-          canvasWidth: state.canvasWidth,
-          canvasHeight: state.canvasHeight,
-          zoom: state.zoom,
-          panX: state.panX,
-          panY: state.panY,
-        });
-        return {
-          strokes: newStrokes,
-          selectedStrokeIds: [],
-          history: newHistory,
-          historyIndex: newHistory.length - 1,
-        };
-      }),
-
-    // Selection operations
-    setSelectedStrokeIds: (ids) => set({ selectedStrokeIds: ids }),
-
-    addToSelection: (id) =>
-      set((state) => ({
-        selectedStrokeIds: state.selectedStrokeIds.includes(id)
-          ? state.selectedStrokeIds
-          : [...state.selectedStrokeIds, id],
-      })),
-
-    removeFromSelection: (id) =>
-      set((state) => ({
-        selectedStrokeIds: state.selectedStrokeIds.filter((sid) => sid !== id),
-      })),
-
-    toggleSelection: (id) =>
-      set((state) => ({
-        selectedStrokeIds: state.selectedStrokeIds.includes(id)
-          ? state.selectedStrokeIds.filter((sid) => sid !== id)
-          : [...state.selectedStrokeIds, id],
-      })),
-
-    clearSelection: () => set({ selectedStrokeIds: [] }),
-
-    // Fill Region operations
-    setFillRegions: (regions) => set({ fillRegions: regions }),
-    setSelectedFillRegionId: (id) => set({ selectedFillRegionId: id }),
-
-    // Update multiple strokes at once (for move operations)
-    updateStrokes: (updates) =>
-      set((state) => {
-        const newStrokes = state.strokes.map((s) => {
-          const update = updates.find((u) => u.id === s.id);
-          return update ? update.stroke : s;
-        });
-        const newHistory = state.history.slice(0, state.historyIndex + 1);
-        newHistory.push({
-          strokes: newStrokes,
-          canvasWidth: state.canvasWidth,
-          canvasHeight: state.canvasHeight,
-          zoom: state.zoom,
-          panX: state.panX,
-          panY: state.panY,
-        });
-        return {
-          strokes: newStrokes,
-          history: newHistory,
-          historyIndex: newHistory.length - 1,
-        };
-      }),
-
-    // Canvas operations
-    setZoom: (zoom) =>
-      set(() => {
-        const clampedZoom = Math.max(0.5, Math.min(5, zoom));
-        return { zoom: clampedZoom };
-      }),
-
+    setZoom: (zoom) => set({ zoom }),
     setPan: (panX, panY) => set({ panX, panY }),
 
-    setStrokeMode: (mode) => set({ strokeMode: mode }),
-    setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
-    setSnapThreshold: (threshold) => set({ snapThreshold: threshold }),
-
-    // New Brush System
-    setBrushType: (type) => {
-      const presets = {
-        pencil: { type: 'pencil', size: 2, opacity: 0.9, pressure: false, hardness: 0.95, spacing: 0.3, curvatureAdaptation: false },
-        pen: { type: 'pen', size: 1.5, opacity: 0.85, pressure: true, hardness: 0.8, spacing: 0.2, curvatureAdaptation: true },
-        brush: { type: 'brush', size: 8, opacity: 0.4, pressure: true, hardness: 0.3, spacing: 0.15, curvatureAdaptation: true },
-        ballpen: { type: 'ballpen', size: 1, opacity: 0.7, pressure: false, hardness: 0.6, spacing: 0.25, curvatureAdaptation: false },
-      };
-      set({
-        currentBrushType: type,
-        currentBrushSettings: presets[type] as BrushSettings,
-      });
-    },
-    setBrushSize: (size) =>
-      set((state) => ({
-        currentBrushSettings: { ...state.currentBrushSettings, size },
-      })),
-    setBrushOpacity: (opacity) =>
-      set((state) => ({
-        currentBrushSettings: { ...state.currentBrushSettings, opacity },
-      })),
-    setBrushHardness: (hardness) =>
-      set((state) => ({
-        currentBrushSettings: { ...state.currentBrushSettings, hardness },
-      })),
-
     // Drawing tools
+    currentColor: '#000000',
+    currentThickness: 2,
     setColor: (color) => set({ currentColor: color }),
     setThickness: (thickness) => set({ currentThickness: thickness }),
 
-    // History
-    pushHistory: (state) =>
-      set((current) => {
-        const newHistory = current.history.slice(0, current.historyIndex + 1);
-        newHistory.push(state);
-        return {
-          history: newHistory,
-          historyIndex: newHistory.length - 1,
-        };
-      }),
+    // Stroke mode
+    strokeMode: 'smooth',
+    setStrokeMode: (mode) => set({ strokeMode: mode }),
 
-    undo: () =>
-      set((state) => {
-        if (state.historyIndex > 0) {
-          const previousState = state.history[state.historyIndex - 1];
-          return {
-            strokes: previousState.strokes,
-            canvasWidth: previousState.canvasWidth,
-            canvasHeight: previousState.canvasHeight,
-            zoom: previousState.zoom,
-            panX: previousState.panX,
-            panY: previousState.panY,
-            strokeMode: previousState.strokeMode ?? state.strokeMode,
-            historyIndex: state.historyIndex - 1,
-          };
-        }
-        return state;
-      }),
+    // Snap
+    snapEnabled: true,
+    snapThreshold: 10,
+    setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
+    setSnapThreshold: (threshold) => set({ snapThreshold: threshold }),
 
-    redo: () =>
-      set((state) => {
-        if (state.historyIndex < state.history.length - 1) {
-          const nextState = state.history[state.historyIndex + 1];
-          return {
-            strokes: nextState.strokes,
-            canvasWidth: nextState.canvasWidth,
-            canvasHeight: nextState.canvasHeight,
-            zoom: nextState.zoom,
-            panX: nextState.panX,
-            panY: nextState.panY,
-            strokeMode: nextState.strokeMode ?? state.strokeMode,
-            historyIndex: state.historyIndex + 1,
-          };
-        }
-        return state;
-      }),
+    // Brush System
+    currentBrushType: 'pencil',
+    currentBrushSettings: defaultBrushSettings,
+    setBrushType: (type) => set({ currentBrushType: type }),
+    setBrushSize: (size) => set((state) => ({
+      currentBrushSettings: { ...state.currentBrushSettings, size }
+    })),
+    setBrushOpacity: (opacity) => set((state) => ({
+      currentBrushSettings: { ...state.currentBrushSettings, opacity }
+    })),
+    setBrushHardness: (hardness) => set((state) => ({
+      currentBrushSettings: { ...state.currentBrushSettings, hardness }
+    })),
+
+    // Undo/Redo
+    history: [],
+    historyIndex: -1,
+    pushHistory: (state) => set((current) => ({
+      history: [...current.history.slice(0, current.historyIndex + 1), state],
+      historyIndex: current.historyIndex + 1
+    })),
+    undo: () => set((current) => {
+      if (current.historyIndex < 0) return current;
+      return { ...current.history[current.historyIndex], historyIndex: current.historyIndex };
+    }),
+    redo: () => set((current) => {
+      if (current.historyIndex >= current.history.length - 1) return current;
+      return { ...current.history[current.historyIndex + 1], historyIndex: current.historyIndex + 1 };
+    }),
 
     // Animation Replay
     isAnimationReplay: false,
     setAnimationReplay: (enabled) => set({ isAnimationReplay: enabled }),
 
-    // Renderer Configuration
+    // Undo Predict
+    lastStrokeOriginalData: null,
+    setLastStrokeOriginalData: (data) => set({ lastStrokeOriginalData: data }),
+    undoLastPredict: () => {
+      const state = get();
+      if (!state.lastStrokeOriginalData) return false;
+      // TODO: 实现恢复逻辑
+      return true;
+    },
+
+    // Renderer
     renderer: 'canvas2d',
     setRenderer: (renderer) => set({ renderer }),
+
+    // 3D Shapes
+    shapes3D: [],
+    addShape3D: (shape) => set((state) => ({ shapes3D: [...state.shapes3D, shape] })),
+    removeShape3D: (id) => set((state) => ({ shapes3D: state.shapes3D.filter(s => s.id !== id) })),
+    updateShape3D: (id, updates) => set((state) => ({
+      shapes3D: state.shapes3D.map(s => s.id === id ? { ...s, ...updates } : s)
+    })),
+    getShape3D: (id) => get().shapes3D.find(s => s.id === id),
+
+    // Workplanes
+    workplanes: [],
+    addWorkplane: (workplane) => set((state) => ({ workplanes: [...state.workplanes, workplane] })),
+    removeWorkplane: (id) => set((state) => ({ workplanes: state.workplanes.filter(w => w.id !== id) })),
+
+    // Feature Tree
+    featureTree: new FeatureTree(),
+    setFeatureTree: (tree) => set({ featureTree: tree })
   };
 });

@@ -1,386 +1,228 @@
-import type { Stroke, CanvasState } from '../types';
-
 /**
- * Command Pattern for History Management
+ * 命令模式基础类
  * 
- * Each command encapsulates an action and its inverse,
- * allowing for proper undo/redo functionality.
+ * 设计原则：
+ * - 所有用户操作封装为命令
+ * - 支持撤销/重做
+ * - 支持异步执行
+ * - 支持取消操作
+ */
+
+import type { IShape } from '../kernel';
+
+/**
+ * 命令接口
+ */
+export interface ICommand {
+    /**
+     * 执行命令
+     */
+    execute(): Promise<void>;
+    
+    /**
+     * 撤销命令
+     */
+    undo(): Promise<void>;
+    
+    /**
+     * 重做命令
+     */
+    redo(): Promise<void>;
+    
+    /**
+     * 命令名称 (用于历史记录)
+     */
+    readonly name: string;
+}
+
+/**
+ * 可取消命令接口
+ */
+export interface ICancelableCommand extends ICommand {
+    /**
+     * 取消命令执行
+     */
+    cancel(): Promise<void>;
+    
+    /**
+     * 是否已完成
+     */
+    readonly isCompleted: boolean;
+    
+    /**
+     * 是否已取消
+     */
+    readonly isCanceled: boolean;
+}
+
+/**
+ * 命令基类 - 实现通用逻辑
+ */
+export abstract class CancelableCommand implements ICancelableCommand {
+    protected isCompleted = false;
+    protected isCanceled = false;
+    
+    /**
+     * 命令名称
+     */
+    abstract readonly name: string;
+
+    /**
+     * 执行命令 (模板方法)
+     */
+    async execute(): Promise<void> {
+        if (this.isCompleted || this.isCanceled) {
+            throw new Error('Command already executed or canceled');
+        }
+
+        try {
+            this.beforeExecute();
+            await this.executeAsync();
+            this.isCompleted = true;
+        } catch (error) {
+            this.isCanceled = true;
+            throw error;
+        } finally {
+            this.afterExecute();
+        }
+    }
+
+    /**
+     * 撤销命令 (抽象方法，子类实现)
+     */
+    abstract undo(): Promise<void>;
+
+    /**
+     * 重做命令 (抽象方法，子类实现)
+     */
+    abstract redo(): Promise<void>;
+
+    /**
+     * 取消命令执行
+     */
+    async cancel(): Promise<void> {
+        this.isCanceled = true;
+        await this.onCancel();
+    }
+
+    /**
+     * 执行前钩子
+     */
+    protected beforeExecute(): void {
+        // 子类可重写
+    }
+
+    /**
+     * 执行后钩子
+     */
+    protected afterExecute(): void {
+        // 子类可重写
+    }
+
+    /**
+     * 取消时钩子
+     */
+    protected onCancel(): void {
+        // 子类可重写
+    }
+
+    /**
+     * 异步执行逻辑 (抽象方法，子类实现)
+     */
+    protected abstract executeAsync(): Promise<void>;
+}
+
+/**
+ * 多步骤命令基类
  * 
- * Benefits:
- * - Memory-efficient: Only store command + params, not full state
- * - Extensible: Easy to add new command types
- * - Testable: Commands are pure operations
- * - Composable: Can chain commands into transactions
+ * 用于需要用户交互的命令 (如：选择→指定参数→执行)
  */
+export abstract class MultistepCommand extends CancelableCommand {
+    /**
+     * 步骤数据
+     */
+    protected stepDatas: any[] = [];
 
-/**
- * Base Command Interface
- * All commands must implement execute and inverse
- */
-export interface Command {
-  /** Unique identifier for the command */
-  readonly id: string;
-  /** Human-readable description for UI */
-  readonly description: string;
-  /** Timestamp when command was created */
-  readonly timestamp: number;
-  
-  /**
-   * Execute the command
-   * @param state Current canvas state
-   * @returns New canvas state after execution
-   */
-  execute(state: CanvasState): CanvasState;
-  
-  /**
-   * Get the inverse command for undo
-   * This allows command-specific undo logic
-   */
-  inverse(): Command;
-}
-
-/**
- * Command to add a stroke to the canvas
- */
-export class AddStrokeCommand implements Command {
-  readonly id: string;
-  readonly description = 'Add stroke';
-  readonly timestamp: number;
-  readonly stroke: Stroke;
-
-  constructor(stroke: Stroke) {
-    this.id = generateCommandId();
-    this.timestamp = Date.now();
-    this.stroke = stroke;
-  }
-
-  execute(state: CanvasState): CanvasState {
-    return {
-      ...state,
-      strokes: [...state.strokes, this.stroke],
-    };
-  }
-
-  inverse(): Command {
-    return new RemoveStrokeCommand(this.stroke.id);
-  }
-}
-
-/**
- * Command to remove a stroke from the canvas
- */
-export class RemoveStrokeCommand implements Command {
-  readonly id: string;
-  readonly description = 'Remove stroke';
-  readonly timestamp: number;
-  readonly strokeId: string;
-  private strokeData: Stroke | null = null;
-
-  constructor(strokeId: string, strokeData?: Stroke) {
-    this.id = generateCommandId();
-    this.timestamp = Date.now();
-    this.strokeId = strokeId;
-    this.strokeData = strokeData || null;
-  }
-
-  execute(state: CanvasState): CanvasState {
-    const stroke = state.strokes.find(s => s.id === this.strokeId);
-    if (stroke) {
-      this.strokeData = stroke;
-    }
-    
-    return {
-      ...state,
-      strokes: state.strokes.filter(s => s.id !== this.strokeId),
-    };
-  }
-
-  inverse(): Command {
-    if (!this.strokeData) {
-      throw new Error('Cannot invert RemoveStrokeCommand without stroke data');
-    }
-    return new AddStrokeCommand(this.strokeData);
-  }
-}
-
-/**
- * Command to update an existing stroke
- */
-export class UpdateStrokeCommand implements Command {
-  readonly id: string;
-  readonly description = 'Update stroke';
-  readonly timestamp: number;
-  readonly strokeId: string;
-  readonly newStroke: Stroke;
-  private oldStroke: Stroke | null = null;
-
-  constructor(strokeId: string, newStroke: Stroke) {
-    this.id = generateCommandId();
-    this.timestamp = Date.now();
-    this.strokeId = strokeId;
-    this.newStroke = newStroke;
-  }
-
-  execute(state: CanvasState): CanvasState {
-    const index = state.strokes.findIndex(s => s.id === this.strokeId);
-    if (index === -1) return state;
-    
-    this.oldStroke = state.strokes[index];
-    
-    const newStrokes = [...state.strokes];
-    newStrokes[index] = this.newStroke;
-    
-    return {
-      ...state,
-      strokes: newStrokes,
-    };
-  }
-
-  inverse(): Command {
-    if (!this.oldStroke) {
-      throw new Error('Cannot invert UpdateStrokeCommand without old stroke data');
-    }
-    return new UpdateStrokeCommand(this.strokeId, this.oldStroke);
-  }
-}
-
-/**
- * Command to clear all strokes
- */
-export class ClearStrokesCommand implements Command {
-  readonly id: string;
-  readonly description = 'Clear all strokes';
-  readonly timestamp: number;
-  private oldStrokes: Stroke[] = [];
-
-  constructor() {
-    this.id = generateCommandId();
-    this.timestamp = Date.now();
-  }
-
-  execute(state: CanvasState): CanvasState {
-    this.oldStrokes = [...state.strokes];
-    
-    return {
-      ...state,
-      strokes: [],
-    };
-  }
-
-  inverse(): Command {
-    return new RestoreStrokesCommand(this.oldStrokes);
-  }
-}
-
-/**
- * Command to restore multiple strokes (used for undoing clear)
- */
-export class RestoreStrokesCommand implements Command {
-  readonly id: string;
-  readonly description = 'Restore strokes';
-  readonly timestamp: number;
-  readonly strokes: Stroke[];
-
-  constructor(strokes: Stroke[]) {
-    this.id = generateCommandId();
-    this.timestamp = Date.now();
-    this.strokes = strokes;
-  }
-
-  execute(state: CanvasState): CanvasState {
-    return {
-      ...state,
-      strokes: [...state.strokes, ...this.strokes],
-    };
-  }
-
-  inverse(): Command {
-    return new ClearStrokesCommand();
-  }
-}
-
-/**
- * Command to update view state (zoom, pan)
- */
-export class UpdateViewCommand implements Command {
-  readonly id: string;
-  readonly description = 'Update view';
-  readonly timestamp: number;
-  readonly zoom: number;
-  readonly panX: number;
-  readonly panY: number;
-  private oldZoom: number = 1;
-  private oldPanX: number = 0;
-  private oldPanY: number = 0;
-
-  constructor(zoom: number, panX: number, panY: number) {
-    this.id = generateCommandId();
-    this.timestamp = Date.now();
-    this.zoom = zoom;
-    this.panX = panX;
-    this.panY = panY;
-  }
-
-  execute(state: CanvasState): CanvasState {
-    this.oldZoom = state.zoom;
-    this.oldPanX = state.panX;
-    this.oldPanY = state.panY;
-    
-    return {
-      ...state,
-      zoom: this.zoom,
-      panX: this.panX,
-      panY: this.panY,
-    };
-  }
-
-  inverse(): Command {
-    return new UpdateViewCommand(this.oldZoom, this.oldPanX, this.oldPanY);
-  }
-}
-
-/**
- * Batch multiple commands into a single transaction
- * Useful for operations that involve multiple changes
- */
-export class BatchCommand implements Command {
-  readonly id: string;
-  readonly description: string;
-  readonly timestamp: number;
-  readonly commands: Command[];
-
-  constructor(description: string, commands: Command[]) {
-    this.id = generateCommandId();
-    this.description = description;
-    this.timestamp = Date.now();
-    this.commands = commands;
-  }
-
-  execute(state: CanvasState): CanvasState {
-    return this.commands.reduce((currentState, cmd) => {
-      return cmd.execute(currentState);
-    }, state);
-  }
-
-  inverse(): Command {
-    // Reverse the commands and get their inverses
-    const inverses = [...this.commands]
-      .reverse()
-      .map(cmd => cmd.inverse());
-    
-    return new BatchCommand(`Undo ${this.description}`, inverses);
-  }
-}
-
-/**
- * History manager using Command pattern
- */
-export class CommandHistory {
-  private commands: Command[] = [];
-  private index: number = -1;
-  private maxSize: number = 100;
-
-  constructor(maxSize: number = 100) {
-    this.maxSize = maxSize;
-  }
-
-  /**
-   * Execute a command and add it to history
-   */
-  execute(state: CanvasState, command: Command): CanvasState {
-    // Remove any commands after current index (redo stack)
-    this.commands = this.commands.slice(0, this.index + 1);
-    
-    // Execute command
-    const newState = command.execute(state);
-    
-    // Add command to history
-    this.commands.push(command);
-    this.index++;
-    
-    // Trim if exceeding max size
-    if (this.commands.length > this.maxSize) {
-      this.commands.shift();
-      this.index--;
-    }
-    
-    return newState;
-  }
-
-  /**
-   * Undo the last command
-   */
-  undo(state: CanvasState): { state: CanvasState; success: boolean } {
-    if (this.index < 0) {
-      return { state, success: false };
+    /**
+     * 重置步骤数据
+     */
+    protected resetStepDatas(): void {
+        this.stepDatas = [];
     }
 
-    const command = this.commands[this.index];
-    const inverseCommand = command.inverse();
-    const newState = inverseCommand.execute(state);
-    
-    this.index--;
-    
-    return { state: newState, success: true };
-  }
-
-  /**
-   * Redo the next command
-   */
-  redo(state: CanvasState): { state: CanvasState; success: boolean } {
-    if (this.index >= this.commands.length - 1) {
-      return { state, success: false };
+    /**
+     * 执行步骤
+     */
+    protected async executeSteps(): Promise<boolean> {
+        const steps = this.getSteps();
+        
+        while (this.stepDatas.length < steps.length && !this.isCanceled) {
+            const step = steps[this.stepDatas.length];
+            const data = await step.execute();
+            
+            if (data === undefined || this.isCanceled) {
+                return false;
+            }
+            
+            this.stepDatas.push(data);
+        }
+        
+        return !this.isCanceled;
     }
 
-    this.index++;
-    const command = this.commands[this.index];
-    const newState = command.execute(state);
-    
-    return { state: newState, success: true };
-  }
+    /**
+     * 执行主任务
+     */
+    protected abstract executeMainTask(): void;
 
-  /**
-   * Check if undo is available
-   */
-  canUndo(): boolean {
-    return this.index >= 0;
-  }
+    /**
+     * 获取步骤列表
+     */
+    protected abstract getSteps(): IStep[];
 
-  /**
-   * Check if redo is available
-   */
-  canRedo(): boolean {
-    return this.index < this.commands.length - 1;
-  }
+    /**
+     * 重写 executeAsync 以支持多步骤
+     */
+    protected async executeAsync(): Promise<void> {
+        const canExecute = await this.canExecute();
+        if (!canExecute) {
+            return;
+        }
 
-  /**
-   * Get current history depth
-   */
-  getDepth(): number {
-    return this.index + 1;
-  }
+        const stepsSuccess = await this.executeSteps();
+        if (!stepsSuccess) {
+            return;
+        }
 
-  /**
-   * Clear all history
-   */
-  clear(): void {
-    this.commands = [];
-    this.index = -1;
-  }
+        this.executeMainTask();
+    }
 
-  /**
-   * Get command descriptions for UI
-   */
-  getHistoryDescriptions(): string[] {
-    return this.commands.map((cmd, i) => {
-      const marker = i === this.index ? ' ← current' : '';
-      return `${cmd.description}${marker}`;
-    });
-  }
+    /**
+     * 检查是否可以执行
+     */
+    protected async canExecute(): Promise<boolean> {
+        return true;
+    }
 }
 
-// Helper function to generate unique command IDs
-let commandIdCounter = 0;
-function generateCommandId(): string {
-  return `cmd-${Date.now()}-${commandIdCounter++}`;
+/**
+ * 命令步骤接口
+ */
+export interface IStep {
+    /**
+     * 执行步骤
+     * @returns 步骤结果数据
+     */
+    execute(): Promise<any>;
+}
+
+/**
+ * 简单步骤实现
+ */
+export class SimpleStep implements IStep {
+    constructor(private executeFn: () => Promise<any>) {}
+
+    async execute(): Promise<any> {
+        return this.executeFn();
+    }
 }

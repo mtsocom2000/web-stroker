@@ -275,6 +275,13 @@ export class DrawingStateManager {
               color = VISUAL_THEME.HOVER_COLOR;
               lineWidth += 1;
             }
+
+            // Create the stroke command
+            commands.push(RenderCommandFactory.createStrokeCommand(
+              geometry,
+              { color, lineWidth, lineStyle: 'solid', opacity: 1 },
+              stroke.id
+            ));
           }
         }
       } else if (stroke.strokeType === 'artistic') {
