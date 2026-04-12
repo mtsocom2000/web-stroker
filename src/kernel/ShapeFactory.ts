@@ -141,18 +141,83 @@ export class ShapeFactory {
      * @param path 路径草图
      */
     static sweep(sketch: Sketch3D, path: Sketch3D): Result<IShape> {
-        // TODO: 实现扫掠
-        return { isOk: false, error: 'Sweep not implemented yet' };
+        try {
+            if (!kernel || !(kernel as any).initialized) {
+                return { isOk: false, error: 'Kernel not initialized' };
+            }
+
+            const wasm = (kernel as any).wasm;
+            if (!wasm) {
+                return { isOk: false, error: 'WASM module not available' };
+            }
+
+            // 1. 将截面和路径转换为 OCCT Wire
+            const sectionWire = SketchConverter.sketchToWire(sketch, wasm);
+            const pathWire = SketchConverter.sketchToWire(path, wasm);
+            
+            // 2. 创建扫掠体
+            const sweepBuilder = new wasm.BRepOffsetAPI_MakePipe(pathWire, sectionWire);
+            
+            if (!sweepBuilder.IsDone()) {
+                return { isOk: false, error: 'Sweep operation failed' };
+            }
+
+            const shape = new OccShape(sweepBuilder.Shape());
+            return { isOk: true, value: shape };
+            
+        } catch (error) {
+            console.error('[ShapeFactory.sweep] Error:', error);
+            return { isOk: false, error: String(error) };
+        }
     }
 
     /**
      * 放样操作
      * 
-     * @param sketches 多个截面草图
+     * @param sketches 多个截面草图 (至少 2 个)
      */
     static loft(sketches: Sketch3D[]): Result<IShape> {
-        // TODO: 实现放样
-        return { isOk: false, error: 'Loft not implemented yet' };
+        try {
+            if (!kernel || !(kernel as any).initialized) {
+                return { isOk: false, error: 'Kernel not initialized' };
+            }
+
+            const wasm = (kernel as any).wasm;
+            if (!wasm) {
+                return { isOk: false, error: 'WASM module not available' };
+            }
+
+            if (sketches.length < 2) {
+                return { isOk: false, error: 'Loft requires at least 2 sketches' };
+            }
+
+            // 1. 将所有截面转换为 OCCT Wire
+            const wires: any[] = [];
+            for (const sketch of sketches) {
+                const wire = SketchConverter.sketchToWire(sketch, wasm);
+                wires.push(wire);
+            }
+            
+            // 2. 创建放样体
+            const loftBuilder = new wasm.BRepOffsetAPI_ThruSections(false, false);
+            
+            for (const wire of wires) {
+                loftBuilder.AddWire(wire);
+            }
+            
+            loftBuilder.Build();
+            
+            if (!loftBuilder.IsDone()) {
+                return { isOk: false, error: 'Loft operation failed' };
+            }
+
+            const shape = new OccShape(loftBuilder.Shape());
+            return { isOk: true, value: shape };
+            
+        } catch (error) {
+            console.error('[ShapeFactory.loft] Error:', error);
+            return { isOk: false, error: String(error) };
+        }
     }
 
     /**
@@ -192,10 +257,43 @@ export class ShapeFactory {
 
     /**
      * 抽壳
+     * 
+     * @param shape 基础形状
+     * @param facesToRemove 要移除的面索引数组
+     * @param thickness 壳体厚度
      */
     static shell(shape: IShape, facesToRemove: number[], thickness: number): Result<IShape> {
-        // TODO: 需要 OCCT 支持
-        return { isOk: false, error: 'Shell not implemented yet' };
+        try {
+            if (!kernel || !(kernel as any).initialized) {
+                return { isOk: false, error: 'Kernel not initialized' };
+            }
+
+            const wasm = (kernel as any).wasm;
+            if (!wasm) {
+                return { isOk: false, error: 'WASM module not available' };
+            }
+
+            const occShape = (shape as OccShape).getShape();
+            
+            // 创建抽壳构建器
+            const shellBuilder = new wasm.BRepOffsetAPI_MakeThickSolid(
+                occShape,
+                facesToRemove,
+                thickness,
+                0.001  // 公差
+            );
+            
+            if (!shellBuilder.IsDone()) {
+                return { isOk: false, error: 'Shell operation failed' };
+            }
+
+            const resultShape = new OccShape(shellBuilder.Shape());
+            return { isOk: true, value: resultShape };
+            
+        } catch (error) {
+            console.error('[ShapeFactory.shell] Error:', error);
+            return { isOk: false, error: String(error) };
+        }
     }
 
     /**

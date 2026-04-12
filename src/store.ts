@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import type { Stroke, CanvasState, ToolCategory, ArtisticTool, DigitalTool, MeasureTool, Point, LengthUnit, AngleUnit, SelectableElement, Constraint, ConstraintType, ConstraintTarget, ConstraintTool } from './types';
-import type { BrushType, BrushSettings } from './brush/presets';
+import type { Stroke, CanvasState, ToolCategory, DigitalTool, MeasureTool, Point, LengthUnit, AngleUnit, SelectableElement, Constraint, ConstraintType, ConstraintTarget, ConstraintTool } from './types';
+// Artistic brush settings removed - focus on digital modeling
 import type { FillRegion } from './fillRegion';
 import { ConstraintManager } from './constraints/ConstraintManager';
 import type { Shape3DData, Feature, Workplane } from './types3d';
@@ -41,11 +41,7 @@ interface DrawingState {
   setAngleUnit: (unit: AngleUnit) => void;
   setPixelsPerUnit: (pixels: number) => void;
 
-  // Artistic Tool
-  artisticTool: ArtisticTool;
-  setArtisticTool: (tool: ArtisticTool) => void;
-
-  // Digital Tool
+  // Digital Tool (artistic mode removed)
   digitalTool: DigitalTool;
   setDigitalTool: (tool: DigitalTool) => void;
   
@@ -246,9 +242,7 @@ export const useDrawingStore = create<DrawingState>((set, get) => {
     setAngleUnit: (angleUnit) => set({ angleUnit }),
     setPixelsPerUnit: (pixelsPerUnit) => set({ pixelsPerUnit }),
 
-    // Artistic Tool
-    artisticTool: 'pencil',
-    setArtisticTool: (tool) => set({ artisticTool: tool }),
+    // Artistic tool removed - only digital mode supported
 
     // Digital Tool
     digitalTool: 'line',
