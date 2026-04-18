@@ -341,7 +341,14 @@ export const useDrawingStore = create<DrawingState>((set, get) => {
 
     // Strokes
     strokes: [],
-    addStroke: (stroke) => set((state) => ({ strokes: [...state.strokes, stroke] })),
+    addStroke: (stroke) => set((state) => {
+      // Skip if stroke with same id already exists (addresses PR #1 comment)
+      if (state.strokes.some(s => s.id === stroke.id)) {
+        console.warn(`Stroke ${stroke.id} already exists, skipping duplicate`);
+        return state;
+      }
+      return { strokes: [...state.strokes, stroke] };
+    }),
     addStrokesBatch: (strokes) => set((state) => ({ strokes: [...state.strokes, ...strokes] })),
     removeStroke: (id) => set((state) => ({ strokes: state.strokes.filter(s => s.id !== id) })),
     updateStroke: (id, stroke) => set((state) => ({
