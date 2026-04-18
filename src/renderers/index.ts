@@ -1,4 +1,6 @@
-export type { Renderer } from './Renderer';
-export { Canvas2DRenderer } from './Canvas2DRenderer';
-export { WebGLRenderer } from './WebGLRenderer';
-export type { RendererType } from './Renderer';
+/**
+ * 渲染器模块导出
+ */
+
+export { ThreeRenderer, createVector3, createPoint3D } from './ThreeRenderer';
+export type { ThreeRendererConfig, SelectableObject } from './ThreeRenderer';

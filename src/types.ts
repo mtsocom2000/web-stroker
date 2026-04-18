@@ -1,9 +1,9 @@
-export type ToolCategory = 'artistic' | 'digital' | 'measure' | 'constraint';
-export type ArtisticTool = 'pencil' | 'pen' | 'brush' | 'ballpen' | 'eraser';
+// Artistic mode removed - focus on digital/3D modeling
+export type ToolCategory = 'digital' | 'measure' | 'constraint';
 export type DigitalTool = 'line' | 'circle' | 'arc' | 'curve';
 export type MeasureTool = 'distance' | 'angle' | 'radius' | 'face';
 export type ConstraintTool = 'distance' | 'angle' | 'radius';
-export type StrokeType = 'artistic' | 'digital';
+export type StrokeType = 'digital';  // Only digital strokes supported
 
 export type LengthUnit = 'mm' | 'cm' | 'inch' | 'px';
 export type AngleUnit = 'degree' | 'radian';

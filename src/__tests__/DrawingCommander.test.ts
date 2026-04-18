@@ -50,6 +50,8 @@ describe('DrawingCommander', () => {
       };
 
       stateManager.setStrokes([stroke]);
+      stateManager.setCurrentTool('select');
+      stateManager.setSelectMode('line');
       commander.render();
 
       expect(mockRenderer.executeCommands).toHaveBeenCalled();
@@ -228,6 +230,8 @@ describe('DrawingCommander', () => {
       };
 
       stateManager.setStrokes([stroke]);
+      stateManager.setCurrentTool('select');
+      stateManager.setSelectMode('line');
       commander.render();
 
       const debugInfo = commander.getDebugInfo();
